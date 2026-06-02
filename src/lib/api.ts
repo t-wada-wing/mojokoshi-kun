@@ -104,6 +104,7 @@ export interface RecordItem {
   student_name: string;
   filename: string;
   created_at: string;
+  downloaded_at: string | null;
 }
 
 export async function fetchRecords(
@@ -147,6 +148,10 @@ export function downloadUrl(passcode: string, id: number): string {
 
 export function downloadZipUrl(passcode: string, school: string): string {
   return `/api/download?school=${encodeURIComponent(school)}&passcode=${encodeURIComponent(passcode)}`;
+}
+
+export function downloadSelectedZipUrl(passcode: string, ids: number[]): string {
+  return `/api/download?ids=${encodeURIComponent(ids.join(','))}&passcode=${encodeURIComponent(passcode)}`;
 }
 
 export async function verifyPasscode(passcode: string): Promise<boolean> {

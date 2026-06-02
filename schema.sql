@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS transcripts (
   transcript TEXT NOT NULL,
   audio_key TEXT,
   model TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  downloaded_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcripts_school ON transcripts(school);
+CREATE INDEX IF NOT EXISTS idx_transcripts_downloaded_at ON transcripts(downloaded_at);

@@ -28,4 +28,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 036b1ad8b4977fb2e2a712812d19f5c4
           wranglerVersion: 4.96.0
-          command: pages deploy dist --project-name=mojokoshi-kun
+          command: pages deploy dist --project-name=mojiokoshi-kun

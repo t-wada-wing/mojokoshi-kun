@@ -17,27 +17,35 @@ export interface TranscriptRecord {
   audio_key: string | null;
   model: string | null;
   created_at: string;
+  downloaded_at: string | null;
 }
 
 export async function ensureSchema(env: Env): Promise<void> {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS transcripts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      school TEXT NOT NULL,
+      grade TEXT NOT NULL,
+      class TEXT NOT NULL,
+      student_name TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      transcript TEXT NOT NULL,
+      audio_key TEXT,
+      model TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      downloaded_at TEXT
+    )
+  `).run();
+
+  const columns = await env.DB.prepare(`PRAGMA table_info(transcripts)`).all<{ name: string }>();
+  const hasDownloadedAt = (columns.results ?? []).some((column) => column.name === 'downloaded_at');
+  if (!hasDownloadedAt) {
+    await env.DB.prepare(`ALTER TABLE transcripts ADD COLUMN downloaded_at TEXT`).run();
+  }
+
   await env.DB.batch([
-    env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS transcripts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        school TEXT NOT NULL,
-        grade TEXT NOT NULL,
-        class TEXT NOT NULL,
-        student_name TEXT NOT NULL,
-        filename TEXT NOT NULL,
-        transcript TEXT NOT NULL,
-        audio_key TEXT,
-        model TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `),
-    env.DB.prepare(`
-      CREATE INDEX IF NOT EXISTS idx_transcripts_school ON transcripts(school)
-    `),
+    env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_transcripts_school ON transcripts(school)`),
+    env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_transcripts_downloaded_at ON transcripts(downloaded_at)`),
   ]);
 }
 

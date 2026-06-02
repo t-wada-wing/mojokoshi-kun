@@ -95,16 +95,16 @@ npx wrangler d1 execute transcribe-db --remote --file=./schema.sql
 本番シークレット（未設定の場合）:
 
 ```bash
-npx wrangler pages secret put OPENAI_API_KEY --project-name=mojokoshi-kun
-npx wrangler pages secret put DOWNLOAD_PASSCODE --project-name=mojokoshi-kun
+npx wrangler pages secret put OPENAI_API_KEY --project-name=mojiokoshi-kun
+npx wrangler pages secret put DOWNLOAD_PASSCODE --project-name=mojiokoshi-kun
 ```
 
 #### Cloudflare Pages と GitHub の連携（ダッシュボード）
 
 CLI だけでは Git 連携の OAuth 認可が必要なため、以下はダッシュボードで行います。
 
-1. [Cloudflare Pages](https://dash.cloudflare.com/) > `mojokoshi-kun` > Settings > Builds & deployments
-2. Connect to Git > GitHub > `t-wada-wing/mojokoshi-kun` を選択
+1. [Cloudflare Pages](https://dash.cloudflare.com/) > `mojiokoshi-kun` > Settings > Builds & deployments
+2. Connect to Git > GitHub > `t-wada-wing/mojiokoshi-kun` を選択
 3. Build command: `npm run build` / Build output: `dist`
 
 ※ GitHub Actions デプロイと併用する場合は、どちらか一方に統一してください。

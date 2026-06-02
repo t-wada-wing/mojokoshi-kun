@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { SCHOOLS } from '../constants';
 import {
   deleteRecord,
+  downloadSelectedZipUrl,
   downloadUrl,
   downloadZipUrl,
   fetchRecords,
@@ -10,6 +11,74 @@ import {
 } from '../lib/api';
 
 const PASSCODE_STORAGE_KEY = 'transcribe-passcode';
+
+function parseServerDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+
+  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  const date = parseServerDate(value);
+  if (!date) return value ?? '';
+
+  return new Intl.DateTimeFormat('ja-JP', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Tokyo',
+  }).format(date);
+}
+
+function dateTimeValue(value: string | null | undefined): number {
+  return parseServerDate(value)?.getTime() ?? 0;
+}
+
+function filenameFromDisposition(disposition: string | null, fallback: string): string {
+  if (!disposition) return fallback;
+
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/);
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      return fallback;
+    }
+  }
+
+  const plain = disposition.match(/filename="?([^";]+)"?/);
+  return plain?.[1] ?? fallback;
+}
+
+async function errorFromDownloadResponse(response: Response): Promise<string> {
+  const contentType = response.headers.get('Content-Type') ?? '';
+  if (contentType.includes('application/json')) {
+    const data = (await response.json()) as { error?: string };
+    return data.error ?? `ダウンロードに失敗しました (${response.status})`;
+  }
+
+  const text = await response.text();
+  return text || `ダウンロードに失敗しました (${response.status})`;
+}
+
+async function startDownload(href: string, fallbackFilename: string): Promise<void> {
+  const response = await fetch(href);
+  if (!response.ok) {
+    throw new Error(await errorFromDownloadResponse(response));
+  }
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filenameFromDisposition(response.headers.get('Content-Disposition'), fallbackFilename);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+}
 
 export default function DownloadPage() {
   const [passcode, setPasscode] = useState('');
@@ -20,6 +89,24 @@ export default function DownloadPage() {
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  const selectedRecords = useMemo(
+    () => records.filter((record) => selectedIds.has(record.id)),
+    [records, selectedIds],
+  );
+
+  const latestDownloads = useMemo(
+    () =>
+      [...records]
+        .filter((record) => record.downloaded_at)
+        .sort((a, b) => dateTimeValue(b.downloaded_at) - dateTimeValue(a.downloaded_at))
+        .slice(0, 5),
+    [records],
+  );
+
+  const allSelected = records.length > 0 && records.every((record) => selectedIds.has(record.id));
+  const undownloadedCount = records.filter((record) => !record.downloaded_at).length;
 
   useEffect(() => {
     const saved = sessionStorage.getItem(PASSCODE_STORAGE_KEY);
@@ -50,8 +137,10 @@ export default function DownloadPage() {
     try {
       const items = await fetchRecords(passcode, selectedSchool);
       setRecords(items);
+      setSelectedIds(new Set());
     } catch (error) {
       setRecords([]);
+      setSelectedIds(new Set());
       setListError(error instanceof Error ? error.message : '一覧の取得に失敗しました');
     } finally {
       setLoading(false);
@@ -69,6 +158,79 @@ export default function DownloadPage() {
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : '削除に失敗しました');
     }
+  };
+
+  const refreshAfterDownload = async (message: string) => {
+    if (!school) return;
+    await loadRecords(school);
+    setActionMessage(message);
+  };
+
+  const runDownload = async (href: string, fallbackFilename: string, message: string) => {
+    setActionMessage('ダウンロードを準備しています...');
+    try {
+      await startDownload(href, fallbackFilename);
+      await refreshAfterDownload(message);
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : 'ダウンロードに失敗しました');
+    }
+  };
+
+  const toggleRecord = (id: number) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedIds(new Set(records.map((record) => record.id)));
+  };
+
+  const selectUndownloaded = () => {
+    setSelectedIds(new Set(records.filter((record) => !record.downloaded_at).map((record) => record.id)));
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
+  const handleDownloadSchool = async () => {
+    if (!school) return;
+    await runDownload(
+      downloadZipUrl(passcode, school),
+      `${school}_文字起こし.zip`,
+      'スクール一括ダウンロードの履歴を更新しました',
+    );
+  };
+
+  const handleDownloadSelected = async () => {
+    if (selectedRecords.length === 0) {
+      setActionMessage('ダウンロードするファイルを選択してください');
+      return;
+    }
+
+    await runDownload(
+      downloadSelectedZipUrl(
+        passcode,
+        selectedRecords.map((record) => record.id),
+      ),
+      school ? `${school}_選択文字起こし.zip` : '選択文字起こし.zip',
+      `${selectedRecords.length}件のダウンロード履歴を更新しました`,
+    );
+  };
+
+  const handleDownloadRecord = async (record: RecordItem) => {
+    await runDownload(
+      downloadUrl(passcode, record.id),
+      record.filename,
+      '最新のダウンロード履歴を更新しました',
+    );
   };
 
   if (!authenticated) {
@@ -111,6 +273,7 @@ export default function DownloadPage() {
             setPasscode('');
             setSchool('');
             setRecords([]);
+            setSelectedIds(new Set());
           }}
         >
           ログアウト
@@ -130,10 +293,45 @@ export default function DownloadPage() {
       </label>
 
       {school ? (
-        <div className="toolbar">
-          <a className="secondary-button" href={downloadZipUrl(passcode, school)}>
+        <div className="toolbar download-toolbar">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void handleDownloadSchool()}
+          >
             このスクールを一括ダウンロード (zip)
-          </a>
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => void handleDownloadSelected()}
+            disabled={selectedRecords.length === 0}
+          >
+            選択したファイルをダウンロード (zip)
+          </button>
+        </div>
+      ) : null}
+
+      {school ? (
+        <div className="download-history" aria-live="polite">
+          <div className="history-header">
+            <h3>最新のダウンロード履歴</h3>
+            <span>{latestDownloads.length > 0 ? `${latestDownloads.length}件表示` : '履歴なし'}</span>
+          </div>
+          {latestDownloads.length > 0 ? (
+            <ol>
+              {latestDownloads.map((record) => (
+                <li key={record.id}>
+                  <span>
+                    {record.student_name} / {record.filename}
+                  </span>
+                  <time>{formatDateTime(record.downloaded_at)}</time>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="field-hint">このスクールのダウンロード履歴はまだありません。</p>
+          )}
         </div>
       ) : null}
 
@@ -142,31 +340,82 @@ export default function DownloadPage() {
       {actionMessage ? <p className="field-hint">{actionMessage}</p> : null}
 
       {records.length > 0 ? (
-        <div className="record-list">
-          {records.map((record) => (
-            <article key={record.id} className="record-item">
-              <div>
-                <strong>{record.student_name}</strong>
-                <p>
-                  {record.grade} / {record.class} / {record.filename}
-                </p>
-                <p className="record-date">{record.created_at}</p>
-              </div>
-              <div className="record-actions">
-                <a className="secondary-button" href={downloadUrl(passcode, record.id)}>
-                  txt
-                </a>
-                <button
-                  type="button"
-                  className="danger-button"
-                  onClick={() => handleDelete(record.id)}
-                >
-                  削除
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+        <>
+          <div className="selection-toolbar">
+            <p>
+              {selectedRecords.length}件選択中 / {records.length}件
+              {undownloadedCount > 0 ? `（未ダウンロード ${undownloadedCount}件）` : ''}
+            </p>
+            <div>
+              <button type="button" className="secondary-button" onClick={selectAll} disabled={allSelected}>
+                一括チェック
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={selectUndownloaded}
+                disabled={undownloadedCount === 0}
+              >
+                未ダウンロードを選択
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={clearSelection}
+                disabled={selectedRecords.length === 0}
+              >
+                一括解除
+              </button>
+            </div>
+          </div>
+
+          <div className="record-list">
+            {records.map((record) => (
+              <article
+                key={record.id}
+                className={`record-item${selectedIds.has(record.id) ? ' selected' : ''}`}
+              >
+                <label className="record-select">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(record.id)}
+                    onChange={() => toggleRecord(record.id)}
+                    aria-label={`${record.filename}を選択`}
+                  />
+                  <span>選択</span>
+                </label>
+                <div className="record-content">
+                  <strong>{record.student_name}</strong>
+                  <p>
+                    {record.grade} / {record.class} / {record.filename}
+                  </p>
+                  <p className="record-date">登録: {formatDateTime(record.created_at)}</p>
+                  <p className={`download-status${record.downloaded_at ? ' downloaded' : ''}`}>
+                    {record.downloaded_at
+                      ? `最終DL: ${formatDateTime(record.downloaded_at)}`
+                      : '未ダウンロード'}
+                  </p>
+                </div>
+                <div className="record-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void handleDownloadRecord(record)}
+                  >
+                    txt
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => handleDelete(record.id)}
+                  >
+                    削除
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </>
       ) : null}
 
       {school && !loading && records.length === 0 && !listError ? (

@@ -1,3 +1,5 @@
+import { strToU8, zipSync } from 'fflate';
+
 export interface Env {
   DB: D1Database;
   AUDIO: R2Bucket;
@@ -235,6 +237,78 @@ export function buildFilename(
 export function contentDisposition(filename: string): string {
   const encoded = encodeURIComponent(filename);
   return `attachment; filename*=UTF-8''${encoded}`;
+}
+
+export function uniqueZipEntryName(filename: string, used: Map<string, number>): string {
+  const count = used.get(filename) ?? 0;
+  used.set(filename, count + 1);
+  if (count === 0) return filename;
+
+  const dotIndex = filename.lastIndexOf('.');
+  if (dotIndex === -1) return `${filename}_${count + 1}`;
+  const base = filename.slice(0, dotIndex);
+  const ext = filename.slice(dotIndex);
+  return `${base}_${count + 1}${ext}`;
+}
+
+export function analysisZipFilename(filename: string): string {
+  return filename.replace(/\.txt$/i, '_分析.txt');
+}
+
+export interface ZipTextEntry {
+  entryName: string;
+  content: string;
+}
+
+export function buildZipResponse(entries: ZipTextEntry[], zipFilename: string): Response {
+  const usedNames = new Map<string, number>();
+  const zipEntries: Record<string, Uint8Array> = {};
+
+  for (const entry of entries) {
+    const zipName = uniqueZipEntryName(entry.entryName, usedNames);
+    zipEntries[zipName] = strToU8(entry.content);
+  }
+
+  return new Response(zipSync(zipEntries), {
+    headers: {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': contentDisposition(zipFilename),
+    },
+  });
+}
+
+export function buildTranscriptZipResponse(
+  records: Array<Pick<TranscriptRecord, 'filename' | 'transcript'>>,
+  zipFilename: string,
+): Response {
+  return buildZipResponse(
+    records.map((record) => ({ entryName: record.filename, content: record.transcript })),
+    zipFilename,
+  );
+}
+
+export function buildAnalysisZipResponse(
+  records: Array<Pick<TranscriptRecord, 'filename'> & { analysis: string }>,
+  zipFilename: string,
+): Response {
+  return buildZipResponse(
+    records.map((record) => ({
+      entryName: analysisZipFilename(record.filename),
+      content: record.analysis,
+    })),
+    zipFilename,
+  );
+}
+
+export function parseDownloadIds(value: string | null): number[] {
+  if (!value) return [];
+
+  const ids = value
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  return Array.from(new Set(ids));
 }
 
 export function getTranscribeModel(env: Env): string {

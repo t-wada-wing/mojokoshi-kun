@@ -4,6 +4,8 @@ import { MAX_BULK_ANALYZE, SCHOOLS } from '../constants';
 import {
   analyzeRecord,
   deleteRecord,
+  downloadAnalysisSelectedZipUrl,
+  downloadAnalysisZipUrl,
   downloadSelectedZipUrl,
   downloadUrl,
   downloadZipUrl,
@@ -148,6 +150,18 @@ export default function DownloadPage() {
   const unanalyzedRecords = useMemo(
     () => records.filter((record) => !record.analyzed_at),
     [records],
+  );
+  const selectedUnanalyzedRecords = useMemo(
+    () => selectedRecords.filter((record) => !record.analyzed_at),
+    [selectedRecords],
+  );
+  const analyzedRecords = useMemo(
+    () => records.filter((record) => record.analyzed_at),
+    [records],
+  );
+  const selectedAnalyzedRecords = useMemo(
+    () => selectedRecords.filter((record) => record.analyzed_at),
+    [selectedRecords],
   );
 
   useEffect(() => {
@@ -312,6 +326,31 @@ export default function DownloadPage() {
     );
   };
 
+  const handleDownloadAnalysisSchool = async () => {
+    if (!school) return;
+    await runDownload(
+      downloadAnalysisZipUrl(passcode, school),
+      `${school}_AI分析.zip`,
+      '分析結果をダウンロードしました',
+    );
+  };
+
+  const handleDownloadAnalysisSelected = async () => {
+    if (selectedAnalyzedRecords.length === 0) {
+      setActionMessage('ダウンロードする分析結果を選択してください');
+      return;
+    }
+
+    await runDownload(
+      downloadAnalysisSelectedZipUrl(
+        passcode,
+        selectedAnalyzedRecords.map((record) => record.id),
+      ),
+      school ? `${school}_選択AI分析.zip` : '選択AI分析.zip',
+      `${selectedAnalyzedRecords.length}件の分析結果をダウンロードしました`,
+    );
+  };
+
   const handleDownloadRecord = async (record: RecordItem) => {
     await runDownload(
       downloadUrl(passcode, record.id),
@@ -356,29 +395,16 @@ export default function DownloadPage() {
     }
   };
 
-  const handleBulkAnalyzeSchool = async () => {
-    if (!school || bulkAnalyzing) return;
-
-    const targets = unanalyzedRecords.slice(0, MAX_BULK_ANALYZE);
-    if (targets.length === 0) {
-      setActionMessage('未分析の記録がありません');
-      return;
-    }
-
-    if (unanalyzedRecords.length > MAX_BULK_ANALYZE) {
-      const proceed = window.confirm(
-        `未分析が ${unanalyzedRecords.length} 件あります。1回の一括分析は最大 ${MAX_BULK_ANALYZE} 件までです。\n今回 ${targets.length} 件を分析します。続行しますか？`,
-      );
-      if (!proceed) return;
-    }
-
+  const runBulkAnalyze = async (targets: RecordItem[], scopeLabel: string) => {
     setBulkAnalyzing(true);
     let success = 0;
     let failed = 0;
 
     for (let index = 0; index < targets.length; index += 1) {
       const record = targets[index];
-      setActionMessage(`AI一括分析中... ${index + 1}/${targets.length} (${record.student_name})`);
+      setActionMessage(
+        `AI一括分析中（${scopeLabel}）... ${index + 1}/${targets.length} (${record.student_name})`,
+      );
       try {
         await analyzeRecord(passcode, record.id);
         success += 1;
@@ -395,6 +421,49 @@ export default function DownloadPage() {
     setActionMessage(
       `一括分析が完了しました（成功 ${success}件 / 失敗 ${failed}件）。1回最大 ${MAX_BULK_ANALYZE} 件まで実行できます。`,
     );
+  };
+
+  const handleBulkAnalyzeSchool = async () => {
+    if (!school || bulkAnalyzing) return;
+
+    const targets = unanalyzedRecords.slice(0, MAX_BULK_ANALYZE);
+    if (targets.length === 0) {
+      setActionMessage('未分析の記録がありません');
+      return;
+    }
+
+    if (unanalyzedRecords.length > MAX_BULK_ANALYZE) {
+      const proceed = window.confirm(
+        `未分析が ${unanalyzedRecords.length} 件あります。1回の一括分析は最大 ${MAX_BULK_ANALYZE} 件までです。\n今回 ${targets.length} 件を分析します。続行しますか？`,
+      );
+      if (!proceed) return;
+    }
+
+    await runBulkAnalyze(targets, 'スクール一括');
+  };
+
+  const handleBulkAnalyzeSelected = async () => {
+    if (!school || bulkAnalyzing) return;
+
+    if (selectedRecords.length === 0) {
+      setActionMessage('分析するファイルを選択してください');
+      return;
+    }
+
+    const targets = selectedUnanalyzedRecords.slice(0, MAX_BULK_ANALYZE);
+    if (targets.length === 0) {
+      setActionMessage('選択した記録はすべて分析済みです');
+      return;
+    }
+
+    if (selectedUnanalyzedRecords.length > MAX_BULK_ANALYZE) {
+      const proceed = window.confirm(
+        `選択した未分析が ${selectedUnanalyzedRecords.length} 件あります。1回の一括分析は最大 ${MAX_BULK_ANALYZE} 件までです。\n今回 ${targets.length} 件を分析します。続行しますか？`,
+      );
+      if (!proceed) return;
+    }
+
+    await runBulkAnalyze(targets, '選択分');
   };
 
   const handleCopyAnalysis = async () => {
@@ -548,6 +617,30 @@ export default function DownloadPage() {
           <button
             type="button"
             className="secondary-button"
+            onClick={() => void handleDownloadAnalysisSchool()}
+            disabled={analyzedRecords.length === 0}
+          >
+            このスクールの分析結果をダウンロード (zip)
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void handleDownloadAnalysisSelected()}
+            disabled={selectedAnalyzedRecords.length === 0}
+          >
+            選択した分析結果をダウンロード (zip)
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => void handleBulkAnalyzeSelected()}
+            disabled={bulkAnalyzing || selectedUnanalyzedRecords.length === 0}
+          >
+            {bulkAnalyzing ? 'AI一括分析中...' : '選択したファイルをAI分析'}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
             onClick={() => void handleBulkAnalyzeSchool()}
             disabled={bulkAnalyzing || unanalyzedRecords.length === 0}
           >
@@ -558,7 +651,9 @@ export default function DownloadPage() {
 
       {school ? (
         <p className="field-hint">
-          1回の一括AI分析は最大 {MAX_BULK_ANALYZE} 件までです（未分析 {unanalyzedRecords.length} 件）。
+          1回の一括AI分析は最大 {MAX_BULK_ANALYZE} 件までです（未分析 {unanalyzedRecords.length} 件
+          {selectedRecords.length > 0 ? ` / 選択中の未分析 ${selectedUnanalyzedRecords.length} 件` : ''}）。
+          分析済みの選択はスキップされます。分析結果は zip（*_分析.txt）または各件の「AI分析」から txt で保存できます。未分析は zip に含まれません。
         </p>
       ) : null}
 

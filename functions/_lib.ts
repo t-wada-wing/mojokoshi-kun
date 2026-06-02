@@ -296,6 +296,19 @@ export async function recordUploadAlert(
     .run();
 }
 
+export function formatTranscriptionError(status: number, errorText: string): string {
+  if (status === 400) {
+    if (errorText.includes('1500 seconds') || errorText.includes('longer than')) {
+      return '音声が長すぎるため文字起こしできませんでした。しばらくしてから再度お試しください。';
+    }
+    if (errorText.includes('25') && errorText.toLowerCase().includes('mb')) {
+      return '音声ファイルが大きすぎます。短い録音をお試しください。';
+    }
+  }
+
+  return `OpenAI API error (${status}): ${errorText}`;
+}
+
 export async function transcribeAudio(
   env: Env,
   audio: Blob,
@@ -317,7 +330,7 @@ export async function transcribeAudio(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
+    throw new Error(formatTranscriptionError(response.status, errorText));
   }
 
   const data = (await response.json()) as { text?: string };
@@ -326,4 +339,50 @@ export async function transcribeAudio(
   }
 
   return data.text;
+}
+
+export interface TranscriptionChunkInput {
+  blob: Blob;
+  filename: string;
+}
+
+export async function transcribeAudioInChunks(
+  env: Env,
+  chunks: TranscriptionChunkInput[],
+): Promise<string> {
+  const parts: string[] = [];
+
+  for (const chunk of chunks) {
+    const text = await transcribeAudio(env, chunk.blob, chunk.filename);
+    const trimmed = text.trim();
+    if (trimmed) parts.push(trimmed);
+  }
+
+  return parts.join('\n');
+}
+
+export function collectAudioFilesFromFormData(formData: FormData): File[] {
+  const countRaw = formData.get('audioChunkCount');
+  const parsedCount = Number(countRaw);
+  const chunkCount =
+    Number.isFinite(parsedCount) && parsedCount >= 1 ? Math.floor(parsedCount) : 0;
+
+  if (chunkCount > 1) {
+    const files: File[] = [];
+    for (let i = 0; i < chunkCount; i += 1) {
+      const entry = formData.get(`audio_${i}`);
+      if (!(entry instanceof File) || entry.size === 0) {
+        throw new Error(`音声チャンク ${i + 1} が不正です`);
+      }
+      files.push(entry);
+    }
+    return files;
+  }
+
+  const single = formData.get('audio');
+  if (single instanceof File && single.size > 0) {
+    return [single];
+  }
+
+  return [];
 }

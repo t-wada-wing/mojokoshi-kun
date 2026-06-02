@@ -2,8 +2,11 @@ import { useMemo, useRef, useState } from 'react';
 import {
   CLASSES,
   GRADES,
+  LONG_AUDIO_HINT_SECONDS,
+  LONG_AUDIO_STATIC_HINT,
   SCHOOLS,
   buildFilename,
+  formatDurationMinutes,
   isUnsupportedAudioFile,
   isValidStudentName,
 } from '../constants';
@@ -25,6 +28,7 @@ export default function UploadPage() {
   const [studentName, setStudentName] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState('');
+  const [longAudioHint, setLongAudioHint] = useState('');
   const [nameError, setNameError] = useState('');
   const [progress, setProgress] = useState<UploadProgress>(initialProgress);
   const [modalOpen, setModalOpen] = useState(false);
@@ -56,6 +60,7 @@ export default function UploadPage() {
 
   const handleFileChange = (selected: File | null) => {
     setFile(selected);
+    setLongAudioHint('');
     if (!selected) {
       setFileError('');
       return;
@@ -78,6 +83,7 @@ export default function UploadPage() {
     setStudentName('');
     setFile(null);
     setFileError('');
+    setLongAudioHint('');
     setNameError('');
   };
 
@@ -100,7 +106,25 @@ export default function UploadPage() {
     });
 
     try {
-      const prepared = await prepareAudioForUpload(file, abortController.signal);
+      const prepared = await prepareAudioForUpload(file, {
+        signal: abortController.signal,
+        onCompressProgress: (message, percent) => {
+          setProgress({
+            stage: 'compressing',
+            percent,
+            message,
+          });
+        },
+      });
+
+      const isLongAudio = prepared.durationSeconds > LONG_AUDIO_HINT_SECONDS;
+      if (isLongAudio) {
+        const minutes = formatDurationMinutes(prepared.durationSeconds);
+        setLongAudioHint(
+          `25分を超える録音（約${minutes}分）です。処理に数分かかる場合があります。`,
+        );
+      }
+
       setProgress({
         stage: 'uploading',
         percent: 10,
@@ -112,8 +136,11 @@ export default function UploadPage() {
         grade,
         className,
         studentName,
-        audio: prepared.blob,
-        audioFilename: prepared.filename,
+        audioParts: prepared.items.map((item) => ({
+          blob: item.blob,
+          filename: item.filename,
+        })),
+        isLongAudio: isLongAudio || prepared.chunked,
         onProgress: setProgress,
         signal: abortController.signal,
       });
@@ -163,6 +190,7 @@ export default function UploadPage() {
         <p className="lead">
           スクール・学年・クラス・生徒氏名を入力し、電話録音ファイルをアップロードしてください。
         </p>
+        <p className="field-hint">{LONG_AUDIO_STATIC_HINT}</p>
 
         <form className="form-grid" onSubmit={handleSubmit}>
           <label>
@@ -226,6 +254,7 @@ export default function UploadPage() {
               disabled={isSubmitting}
             />
             {file ? <span className="field-hint">{file.name}</span> : null}
+            {longAudioHint ? <span className="field-hint">{longAudioHint}</span> : null}
             {fileError ? <span className="field-error">{fileError}</span> : null}
           </label>
 

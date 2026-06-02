@@ -11,19 +11,33 @@ export interface UploadResult {
   cancelled?: boolean;
 }
 
+export interface AudioUploadPart {
+  blob: Blob;
+  filename: string;
+}
+
 export interface UploadParams {
   school: string;
   grade: string;
   className: string;
   studentName: string;
-  audio: Blob;
-  audioFilename: string;
+  audioParts: AudioUploadPart[];
+  isLongAudio: boolean;
   onProgress: (progress: UploadProgress) => void;
   signal?: AbortSignal;
 }
 
 export function uploadTranscription(params: UploadParams): Promise<UploadResult> {
-  const { school, grade, className, studentName, audio, audioFilename, onProgress, signal } = params;
+  const {
+    school,
+    grade,
+    className,
+    studentName,
+    audioParts,
+    isLongAudio,
+    onProgress,
+    signal,
+  } = params;
 
   return new Promise((resolve) => {
     const formData = new FormData();
@@ -31,7 +45,15 @@ export function uploadTranscription(params: UploadParams): Promise<UploadResult>
     formData.append('grade', grade);
     formData.append('className', className);
     formData.append('studentName', studentName);
-    formData.append('audio', audio, audioFilename);
+    formData.append('audioChunkCount', String(audioParts.length));
+
+    if (audioParts.length === 1) {
+      formData.append('audio', audioParts[0].blob, audioParts[0].filename);
+    } else {
+      audioParts.forEach((part, index) => {
+        formData.append(`audio_${index}`, part.blob, part.filename);
+      });
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/transcribe');
@@ -65,10 +87,14 @@ export function uploadTranscription(params: UploadParams): Promise<UploadResult>
     };
 
     xhr.upload.onload = () => {
+      const transcribingMessage =
+        audioParts.length > 1 && isLongAudio
+          ? `文字起こし中です（1/${audioParts.length}）… 25分を超える録音は時間がかかります`
+          : '文字起こしを実行しています...';
       onProgress({
         stage: 'transcribing',
         percent: 75,
-        message: '文字起こしを実行しています...',
+        message: transcribingMessage,
       });
     };
 

@@ -30,6 +30,19 @@ export type ClassName = (typeof CLASSES)[number];
 
 export const UNSUPPORTED_EXTENSIONS = ['.amr', '.3gp', '.3gpp', '.awb'] as const;
 
+/** OpenAI 文字起こし用の内部分割（秒）。API 上限 25 分より短く取る */
+export const MAX_TRANSCRIBE_CHUNK_SECONDS = 20 * 60;
+
+/** 画面案内・長時間ヒント表示の閾値（秒） */
+export const LONG_AUDIO_HINT_SECONDS = 25 * 60;
+
+export const LONG_AUDIO_STATIC_HINT =
+  '25分を超える音声は、圧縮と文字起こしに通常より時間がかかります。完了まで画面を閉じないでください。';
+
+export function formatDurationMinutes(seconds: number): number {
+  return Math.max(1, Math.ceil(seconds / 60));
+}
+
 export const STUDENT_NAME_PATTERN = /^\S+ \S+$/;
 
 export function isValidStudentName(name: string): boolean {

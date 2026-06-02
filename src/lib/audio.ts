@@ -1,4 +1,5 @@
 import { Mp3Encoder } from '@breezystack/lamejs';
+import { MAX_TRANSCRIBE_CHUNK_SECONDS } from '../constants';
 
 const TARGET_SAMPLE_RATE = 16000;
 const MP3_BITRATE = 64;
@@ -7,6 +8,17 @@ export interface CompressResult {
   blob: Blob;
   filename: string;
   compressed: boolean;
+}
+
+export interface PrepareAudioResult {
+  items: CompressResult[];
+  durationSeconds: number;
+  chunked: boolean;
+}
+
+export interface PrepareAudioOptions {
+  signal?: AbortSignal;
+  onCompressProgress?: (message: string, percent: number) => void;
 }
 
 function resampleToMono16kHz(audioBuffer: AudioBuffer): Float32Array {
@@ -88,7 +100,44 @@ function replaceExtension(filename: string, ext: string): string {
   return `${filename.slice(0, dotIndex)}${ext}`;
 }
 
-export async function compressAudioFile(file: File, signal?: AbortSignal): Promise<CompressResult> {
+function chunkFilename(baseMp3Name: string, index: number, total: number): string {
+  if (total <= 1) return baseMp3Name;
+  const dotIndex = baseMp3Name.lastIndexOf('.');
+  const base = dotIndex === -1 ? baseMp3Name : baseMp3Name.slice(0, dotIndex);
+  const ext = dotIndex === -1 ? '.mp3' : baseMp3Name.slice(dotIndex);
+  return `${base}_part${index + 1}${ext}`;
+}
+
+function sliceAudioBuffer(source: AudioBuffer, startSample: number, lengthSamples: number): AudioBuffer {
+  const channels = source.numberOfChannels;
+  const rate = source.sampleRate;
+  const slice = new AudioBuffer({
+    length: lengthSamples,
+    numberOfChannels: channels,
+    sampleRate: rate,
+  });
+
+  for (let ch = 0; ch < channels; ch += 1) {
+    slice.getChannelData(ch).set(source.getChannelData(ch).subarray(startSample, startSample + lengthSamples));
+  }
+
+  return slice;
+}
+
+function encodeBufferToMp3(audioBuffer: AudioBuffer, signal?: AbortSignal): Blob {
+  const mono = resampleToMono16kHz(audioBuffer);
+  const pcm = floatTo16BitPCM(mono);
+  const mp3Data = encodeMp3(pcm, signal);
+  return new Blob([Uint8Array.from(mp3Data)], { type: 'audio/mpeg' });
+}
+
+export async function compressAudioFile(
+  file: File,
+  options?: PrepareAudioOptions,
+): Promise<PrepareAudioResult> {
+  const signal = options?.signal;
+  const onProgress = options?.onCompressProgress;
+
   assertNotAborted(signal);
   const arrayBuffer = await file.arrayBuffer();
   assertNotAborted(signal);
@@ -97,15 +146,50 @@ export async function compressAudioFile(file: File, signal?: AbortSignal): Promi
   try {
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
     assertNotAborted(signal);
-    const mono = resampleToMono16kHz(audioBuffer);
-    const pcm = floatTo16BitPCM(mono);
-    const mp3Data = encodeMp3(pcm, signal);
-    const blob = new Blob([Uint8Array.from(mp3Data)], { type: 'audio/mpeg' });
+
+    const durationSeconds = audioBuffer.duration;
+    const baseName = replaceExtension(file.name, '.mp3');
+    const maxChunkSeconds = MAX_TRANSCRIBE_CHUNK_SECONDS;
+    const chunkCount = Math.max(1, Math.ceil(durationSeconds / maxChunkSeconds));
+    const chunked = chunkCount > 1;
+
+    if (chunked) {
+      onProgress?.('25分を超える音声を分割・圧縮しています…（完了までお待ちください）', 8);
+    } else {
+      onProgress?.('音声を圧縮しています...', 5);
+    }
+
+    const items: CompressResult[] = [];
+    const samplesPerChunk = Math.floor(maxChunkSeconds * audioBuffer.sampleRate);
+
+    for (let i = 0; i < chunkCount; i += 1) {
+      assertNotAborted(signal);
+      const startSample = i * samplesPerChunk;
+      const remaining = audioBuffer.length - startSample;
+      const lengthSamples = Math.min(samplesPerChunk, remaining);
+      if (lengthSamples <= 0) break;
+
+      if (chunked) {
+        const splitPercent = 8 + Math.round(((i + 0.5) / chunkCount) * 7);
+        onProgress?.(
+          `25分を超える音声を分割・圧縮しています…（${i + 1}/${chunkCount}）`,
+          splitPercent,
+        );
+      }
+
+      const slice = sliceAudioBuffer(audioBuffer, startSample, lengthSamples);
+      const blob = encodeBufferToMp3(slice, signal);
+      items.push({
+        blob,
+        filename: chunkFilename(baseName, i, chunkCount),
+        compressed: true,
+      });
+    }
 
     return {
-      blob,
-      filename: replaceExtension(file.name, '.mp3'),
-      compressed: true,
+      items,
+      durationSeconds,
+      chunked,
     };
   } finally {
     await audioContext.close();
@@ -114,12 +198,12 @@ export async function compressAudioFile(file: File, signal?: AbortSignal): Promi
 
 export async function prepareAudioForUpload(
   file: File,
-  signal?: AbortSignal,
-): Promise<CompressResult> {
+  options?: PrepareAudioOptions,
+): Promise<PrepareAudioResult> {
   try {
-    return await compressAudioFile(file, signal);
+    return await compressAudioFile(file, options);
   } catch (error) {
-    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+    if (options?.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       throw error;
     }
 
@@ -130,9 +214,15 @@ export async function prepareAudioForUpload(
     }
 
     return {
-      blob: file,
-      filename: file.name,
-      compressed: false,
+      items: [
+        {
+          blob: file,
+          filename: file.name,
+          compressed: false,
+        },
+      ],
+      durationSeconds: 0,
+      chunked: false,
     };
   }
 }

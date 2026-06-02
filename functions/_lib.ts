@@ -107,6 +107,28 @@ export interface UploadEventInput {
   status: 'accepted' | 'completed' | 'rejected' | 'failed';
 }
 
+async function addColumnIfMissing(
+  env: Env,
+  table: 'transcripts' | 'upload_events',
+  column: string,
+  definition: string,
+): Promise<void> {
+  const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+  if ((columns.results ?? []).some((item) => item.name === column)) {
+    return;
+  }
+
+  try {
+    await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('duplicate column name')) {
+      return;
+    }
+    throw error;
+  }
+}
+
 export async function ensureSchema(env: Env): Promise<void> {
   await env.DB.prepare(`
     CREATE TABLE IF NOT EXISTS transcripts (
@@ -162,29 +184,12 @@ export async function ensureSchema(env: Env): Promise<void> {
     )
   `).run();
 
-  const transcriptColumns = await env.DB.prepare(`PRAGMA table_info(transcripts)`).all<{ name: string }>();
-  const transcriptColumnNames = new Set((transcriptColumns.results ?? []).map((column) => column.name));
-  if (!transcriptColumnNames.has('downloaded_at')) {
-    await env.DB.prepare(`ALTER TABLE transcripts ADD COLUMN downloaded_at TEXT`).run();
-  }
-  if (!transcriptColumnNames.has('analysis')) {
-    await env.DB.prepare(`ALTER TABLE transcripts ADD COLUMN analysis TEXT`).run();
-  }
-  if (!transcriptColumnNames.has('analyzed_at')) {
-    await env.DB.prepare(`ALTER TABLE transcripts ADD COLUMN analyzed_at TEXT`).run();
-  }
-  if (!transcriptColumnNames.has('analysis_model')) {
-    await env.DB.prepare(`ALTER TABLE transcripts ADD COLUMN analysis_model TEXT`).run();
-  }
-
-  const uploadColumns = await env.DB.prepare(`PRAGMA table_info(upload_events)`).all<{ name: string }>();
-  const uploadColumnNames = new Set((uploadColumns.results ?? []).map((column) => column.name));
-  if (!uploadColumnNames.has('input_tokens')) {
-    await env.DB.prepare(`ALTER TABLE upload_events ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`).run();
-  }
-  if (!uploadColumnNames.has('output_tokens')) {
-    await env.DB.prepare(`ALTER TABLE upload_events ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`).run();
-  }
+  await addColumnIfMissing(env, 'transcripts', 'downloaded_at', 'TEXT');
+  await addColumnIfMissing(env, 'transcripts', 'analysis', 'TEXT');
+  await addColumnIfMissing(env, 'transcripts', 'analyzed_at', 'TEXT');
+  await addColumnIfMissing(env, 'transcripts', 'analysis_model', 'TEXT');
+  await addColumnIfMissing(env, 'upload_events', 'input_tokens', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(env, 'upload_events', 'output_tokens', 'INTEGER NOT NULL DEFAULT 0');
 
   await env.DB.batch([
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_transcripts_school ON transcripts(school)`),

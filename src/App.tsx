@@ -20,7 +20,7 @@ export default function App() {
             アップロード
           </NavLink>
           <NavLink to="/download" className={navClassName('nav-link nav-link-sub')}>
-            ダウンロード
+            分析
           </NavLink>
         </nav>
       </header>

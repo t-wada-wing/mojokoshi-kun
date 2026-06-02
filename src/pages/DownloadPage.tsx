@@ -18,6 +18,8 @@ import {
 
 const PASSCODE_STORAGE_KEY = 'transcribe-passcode';
 
+type DownloadTab = 'ai' | 'admin';
+
 function parseServerDate(value: string | null | undefined): Date | null {
   if (!value) return null;
 
@@ -106,6 +108,9 @@ export default function DownloadPage() {
   const [monthlyUsage, setMonthlyUsage] = useState<MonthlyUsageResponse | null>(null);
   const [usageError, setUsageError] = useState('');
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
+  const [activeTab, setActiveTab] = useState<DownloadTab>('ai');
+  const [adminLoaded, setAdminLoaded] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(false);
   const [analysisModal, setAnalysisModal] = useState<{
     open: boolean;
     title: string;
@@ -150,7 +155,6 @@ export default function DownloadPage() {
     if (saved) {
       setPasscode(saved);
       setAuthenticated(true);
-      void refreshAdminPanels(saved);
     }
   }, []);
 
@@ -180,6 +184,23 @@ export default function DownloadPage() {
     await Promise.all([loadUploadMonitor(targetPasscode), loadMonthlyUsage(targetPasscode)]);
   };
 
+  const loadAdminPanels = async (targetPasscode = passcode) => {
+    setAdminLoading(true);
+    try {
+      await refreshAdminPanels(targetPasscode);
+      setAdminLoaded(true);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const handleTabChange = (tab: DownloadTab) => {
+    setActiveTab(tab);
+    if (tab === 'admin' && !adminLoaded && !adminLoading) {
+      void loadAdminPanels(passcode);
+    }
+  };
+
   const handleAuth = async (event: React.FormEvent) => {
     event.preventDefault();
     setAuthError('');
@@ -191,7 +212,8 @@ export default function DownloadPage() {
     }
     sessionStorage.setItem(PASSCODE_STORAGE_KEY, passcode);
     setAuthenticated(true);
-    void refreshAdminPanels(passcode);
+    setActiveTab('ai');
+    setAdminLoaded(false);
   };
 
   const loadRecords = async (selectedSchool: string) => {
@@ -203,7 +225,6 @@ export default function DownloadPage() {
       const items = await fetchRecords(passcode, selectedSchool);
       setRecords(items);
       setSelectedIds(new Set());
-      void refreshAdminPanels(passcode);
     } catch (error) {
       setRecords([]);
       setSelectedIds(new Set());
@@ -326,7 +347,9 @@ export default function DownloadPage() {
       if (school) {
         await loadRecords(school);
       }
-      void refreshAdminPanels(passcode);
+      if (adminLoaded) {
+        void refreshAdminPanels(passcode);
+      }
     } catch (error) {
       setAnalysisModal((current) => ({ ...current, open: false, loading: false }));
       setActionMessage(error instanceof Error ? error.message : '分析に失敗しました');
@@ -366,7 +389,9 @@ export default function DownloadPage() {
 
     setBulkAnalyzing(false);
     await loadRecords(school);
-    void refreshAdminPanels(passcode);
+    if (adminLoaded) {
+      void refreshAdminPanels(passcode);
+    }
     setActionMessage(
       `一括分析が完了しました（成功 ${success}件 / 失敗 ${failed}件）。1回最大 ${MAX_BULK_ANALYZE} 件まで実行できます。`,
     );
@@ -409,7 +434,7 @@ export default function DownloadPage() {
   if (!authenticated) {
     return (
       <section className="card narrow">
-        <h2>ダウンロード / 管理</h2>
+        <h2>分析</h2>
         <p className="lead">パスコードを入力してください。</p>
         <form className="form-grid" onSubmit={handleAuth}>
           <label>
@@ -434,8 +459,12 @@ export default function DownloadPage() {
     <section className="card">
       <div className="section-header">
         <div>
-          <h2>ダウンロード / 管理</h2>
-          <p className="lead">スクールを選択して文字起こし結果を確認・ダウンロードできます。</p>
+          <h2>分析</h2>
+          <p className="lead">
+            {activeTab === 'ai'
+              ? 'スクールを選び、面談録音のAI分析と文字起こしの取得ができます。'
+              : '利用料金の目安とアップロード監視を確認できます。'}
+          </p>
         </div>
         <button
           type="button"
@@ -451,104 +480,42 @@ export default function DownloadPage() {
             setMonitorError('');
             setMonthlyUsage(null);
             setUsageError('');
+            setActiveTab('ai');
+            setAdminLoaded(false);
+            setAdminLoading(false);
           }}
         >
           ログアウト
         </button>
       </div>
 
-      <section className="usage-panel" aria-live="polite">
-        <div className="history-header">
-          <h3>月別 推定利用料金（目安）</h3>
-          {monthlyUsage ? <span>為替目安: 1USD = {monthlyUsage.usdJpyRate}円</span> : null}
-        </div>
-        {monthlyUsage ? (
-          <>
-            <p className="field-hint">{monthlyUsage.disclaimer}</p>
-            {monthlyUsage.months.length > 0 ? (
-              <table className="usage-table">
-                <thead>
-                  <tr>
-                    <th>月</th>
-                    <th>文字起こし</th>
-                    <th>AI分析</th>
-                    <th>合計(円)</th>
-                    <th>合計(USD)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {monthlyUsage.months.map((row) => (
-                    <tr key={row.month}>
-                      <td>{formatMonthLabel(row.month)}</td>
-                      <td>{formatYen(row.transcribeUsd * monthlyUsage.usdJpyRate)}</td>
-                      <td>{formatYen(row.analyzeUsd * monthlyUsage.usdJpyRate)}</td>
-                      <td>{formatYen(row.totalJpy)}</td>
-                      <td>{formatUsd(row.totalUsd)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <p className="field-hint">まだ集計データがありません。</p>
-            )}
-          </>
-        ) : (
-          <p className="field-hint">利用料金を読み込み中...</p>
-        )}
-        {usageError ? <p className="field-error">{usageError}</p> : null}
-      </section>
+      <div className="download-tabs" role="tablist" aria-label="分析メニュー">
+        <button
+          type="button"
+          role="tab"
+          id="download-tab-ai"
+          aria-selected={activeTab === 'ai'}
+          aria-controls="download-panel-ai"
+          className={`download-tab${activeTab === 'ai' ? ' active' : ''}`}
+          onClick={() => handleTabChange('ai')}
+        >
+          AI分析
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="download-tab-admin"
+          aria-selected={activeTab === 'admin'}
+          aria-controls="download-panel-admin"
+          className={`download-tab${activeTab === 'admin' ? ' active' : ''}`}
+          onClick={() => handleTabChange('admin')}
+        >
+          管理
+        </button>
+      </div>
 
-      {uploadMonitor ? (
-        <section className="upload-monitor" aria-live="polite">
-          <div className="history-header">
-            <h3>アップロード監視</h3>
-            <span>{uploadMonitor.alerts.length > 0 ? '異常検知あり' : '正常'}</span>
-          </div>
-          <div className="monitor-grid">
-            <p>
-              <strong>{uploadMonitor.summary.totalCount}</strong>
-              <span>24時間の総数</span>
-            </p>
-            <p>
-              <strong>{uploadMonitor.summary.rejectedCount}</strong>
-              <span>遮断</span>
-            </p>
-            <p>
-              <strong>{formatBytes(uploadMonitor.limits.maxFileBytes)}</strong>
-              <span>ファイル上限</span>
-            </p>
-            {uploadMonitor.analysisToday ? (
-              <p>
-                <strong>{uploadMonitor.analysisToday.count}</strong>
-                <span>
-                  本日の分析（約{formatYen(uploadMonitor.analysisToday.estimatedJpy)}）
-                </span>
-              </p>
-            ) : null}
-          </div>
-          {uploadMonitor.analysisLimits ? (
-            <p className="field-hint">
-              AI分析の上限: 1時間あたり {uploadMonitor.analysisLimits.maxPerIpHour}件 / 1日全体{' '}
-              {uploadMonitor.analysisLimits.maxGlobalDay}件
-            </p>
-          ) : null}
-          {uploadMonitor.alerts.length > 0 ? (
-            <ol className="monitor-alerts">
-              {uploadMonitor.alerts.slice(0, 3).map((alert) => (
-                <li key={alert.id}>
-                  <span>{formatDateTime(alert.created_at)}</span>
-                  {alert.detail.school ? `${alert.detail.school} / ` : ''}
-                  {alert.detail.filename ?? alert.kind}
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="field-hint">直近の異常アップロードはありません。</p>
-          )}
-        </section>
-      ) : null}
-      {monitorError ? <p className="field-error">{monitorError}</p> : null}
-
+      {activeTab === 'ai' ? (
+        <div id="download-panel-ai" role="tabpanel" aria-labelledby="download-tab-ai">
       <label>
         スクール
         <select value={school} onChange={(e) => loadRecords(e.target.value)}>
@@ -718,6 +685,106 @@ export default function DownloadPage() {
 
       {school && !loading && records.length === 0 && !listError ? (
         <p className="field-hint">このスクールの記録はまだありません。</p>
+      ) : null}
+        </div>
+      ) : null}
+
+      {activeTab === 'admin' ? (
+        <div id="download-panel-admin" role="tabpanel" aria-labelledby="download-tab-admin">
+      {adminLoading ? <p className="field-hint">管理データを読み込み中...</p> : null}
+
+      <section className="usage-panel" aria-live="polite">
+        <div className="history-header">
+          <h3>月別 推定利用料金（目安）</h3>
+          {monthlyUsage ? <span>為替目安: 1USD = {monthlyUsage.usdJpyRate}円</span> : null}
+        </div>
+        {monthlyUsage ? (
+          <>
+            <p className="field-hint">{monthlyUsage.disclaimer}</p>
+            {monthlyUsage.months.length > 0 ? (
+              <table className="usage-table">
+                <thead>
+                  <tr>
+                    <th>月</th>
+                    <th>文字起こし</th>
+                    <th>AI分析</th>
+                    <th>合計(円)</th>
+                    <th>合計(USD)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monthlyUsage.months.map((row) => (
+                    <tr key={row.month}>
+                      <td>{formatMonthLabel(row.month)}</td>
+                      <td>{formatYen(row.transcribeUsd * monthlyUsage.usdJpyRate)}</td>
+                      <td>{formatYen(row.analyzeUsd * monthlyUsage.usdJpyRate)}</td>
+                      <td>{formatYen(row.totalJpy)}</td>
+                      <td>{formatUsd(row.totalUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="field-hint">まだ集計データがありません。</p>
+            )}
+          </>
+        ) : (
+          <p className="field-hint">利用料金を読み込み中...</p>
+        )}
+        {usageError ? <p className="field-error">{usageError}</p> : null}
+      </section>
+
+      {uploadMonitor ? (
+        <section className="upload-monitor" aria-live="polite">
+          <div className="history-header">
+            <h3>アップロード監視</h3>
+            <span>{uploadMonitor.alerts.length > 0 ? '異常検知あり' : '正常'}</span>
+          </div>
+          <div className="monitor-grid">
+            <p>
+              <strong>{uploadMonitor.summary.totalCount}</strong>
+              <span>24時間の総数</span>
+            </p>
+            <p>
+              <strong>{uploadMonitor.summary.rejectedCount}</strong>
+              <span>遮断</span>
+            </p>
+            <p>
+              <strong>{formatBytes(uploadMonitor.limits.maxFileBytes)}</strong>
+              <span>ファイル上限</span>
+            </p>
+            {uploadMonitor.analysisToday ? (
+              <p>
+                <strong>{uploadMonitor.analysisToday.count}</strong>
+                <span>
+                  本日の分析（約{formatYen(uploadMonitor.analysisToday.estimatedJpy)}）
+                </span>
+              </p>
+            ) : null}
+          </div>
+          {uploadMonitor.analysisLimits ? (
+            <p className="field-hint">
+              AI分析の上限: 1時間あたり {uploadMonitor.analysisLimits.maxPerIpHour}件 / 1日全体{' '}
+              {uploadMonitor.analysisLimits.maxGlobalDay}件
+            </p>
+          ) : null}
+          {uploadMonitor.alerts.length > 0 ? (
+            <ol className="monitor-alerts">
+              {uploadMonitor.alerts.slice(0, 3).map((alert) => (
+                <li key={alert.id}>
+                  <span>{formatDateTime(alert.created_at)}</span>
+                  {alert.detail.school ? `${alert.detail.school} / ` : ''}
+                  {alert.detail.filename ?? alert.kind}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="field-hint">直近の異常アップロードはありません。</p>
+          )}
+        </section>
+      ) : null}
+      {monitorError ? <p className="field-error">{monitorError}</p> : null}
+        </div>
       ) : null}
 
       <AnalysisModal

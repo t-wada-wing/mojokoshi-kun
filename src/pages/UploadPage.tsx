@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   CLASSES,
   GRADES,
@@ -32,6 +32,7 @@ export default function UploadPage() {
   const [modalMessage, setModalMessage] = useState('');
   const [modalVariant, setModalVariant] = useState<'success' | 'error'>('success');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const previewFilename = useMemo(() => {
     if (!school || !grade || !className || !studentName) return '';
@@ -80,9 +81,16 @@ export default function UploadPage() {
     setNameError('');
   };
 
+  const handleCancel = () => {
+    abortControllerRef.current?.abort();
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canUpload || !file) return;
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     setIsSubmitting(true);
     setProgress({
@@ -92,7 +100,7 @@ export default function UploadPage() {
     });
 
     try {
-      const prepared = await prepareAudioForUpload(file);
+      const prepared = await prepareAudioForUpload(file, abortController.signal);
       setProgress({
         stage: 'uploading',
         percent: 10,
@@ -107,7 +115,12 @@ export default function UploadPage() {
         audio: prepared.blob,
         audioFilename: prepared.filename,
         onProgress: setProgress,
+        signal: abortController.signal,
       });
+
+      if (result.cancelled || abortController.signal.aborted) {
+        return;
+      }
 
       if (result.ok) {
         setModalVariant('success');
@@ -122,6 +135,10 @@ export default function UploadPage() {
         setModalOpen(true);
       }
     } catch (error) {
+      if (abortController.signal.aborted) {
+        return;
+      }
+
       const message = error instanceof Error ? error.message : 'アップロードに失敗しました';
       setProgress({
         stage: 'error',
@@ -133,6 +150,7 @@ export default function UploadPage() {
       setModalMessage(message);
       setModalOpen(true);
     } finally {
+      abortControllerRef.current = null;
       setIsSubmitting(false);
       setProgress(initialProgress);
     }
@@ -221,7 +239,7 @@ export default function UploadPage() {
         </form>
       </section>
 
-      <UploadOverlay progress={progress} />
+      <UploadOverlay progress={progress} onCancel={handleCancel} />
       <ResultModal
         open={modalOpen}
         title={modalTitle}

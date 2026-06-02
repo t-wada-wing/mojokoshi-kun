@@ -239,6 +239,11 @@ input::placeholder {
   z-index: 1000;
 }
 
+.overlay-blocking {
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
 .overlay-card,
 .modal-card {
   width: min(100%, 420px);
@@ -277,6 +282,16 @@ input::placeholder {
   margin-bottom: 0;
   color: #64748b;
   font-size: 0.875rem;
+}
+
+.overlay-actions {
+  margin-top: 1.25rem;
+  display: flex;
+  justify-content: center;
+}
+
+.overlay-actions .secondary-button {
+  min-width: 8rem;
 }
 
 .modal-card.success h2 {

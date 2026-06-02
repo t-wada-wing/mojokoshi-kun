@@ -8,6 +8,7 @@ export interface UploadResult {
   ok: boolean;
   filename?: string;
   error?: string;
+  cancelled?: boolean;
 }
 
 export interface UploadParams {
@@ -18,10 +19,11 @@ export interface UploadParams {
   audio: Blob;
   audioFilename: string;
   onProgress: (progress: UploadProgress) => void;
+  signal?: AbortSignal;
 }
 
 export function uploadTranscription(params: UploadParams): Promise<UploadResult> {
-  const { school, grade, className, studentName, audio, audioFilename, onProgress } = params;
+  const { school, grade, className, studentName, audio, audioFilename, onProgress, signal } = params;
 
   return new Promise((resolve) => {
     const formData = new FormData();
@@ -34,6 +36,15 @@ export function uploadTranscription(params: UploadParams): Promise<UploadResult>
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/transcribe');
     xhr.responseType = 'json';
+
+    const abortUpload = () => xhr.abort();
+    if (signal) {
+      if (signal.aborted) {
+        resolve({ ok: false, cancelled: true });
+        return;
+      }
+      signal.addEventListener('abort', abortUpload, { once: true });
+    }
 
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) {
@@ -59,6 +70,10 @@ export function uploadTranscription(params: UploadParams): Promise<UploadResult>
         percent: 75,
         message: '文字起こしを実行しています...',
       });
+    };
+
+    xhr.onabort = () => {
+      resolve({ ok: false, cancelled: true });
     };
 
     xhr.onerror = () => {

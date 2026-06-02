@@ -51,12 +51,19 @@ function floatTo16BitPCM(input: Float32Array): Int16Array {
   return output;
 }
 
-function encodeMp3(samples: Int16Array): Uint8Array {
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+}
+
+function encodeMp3(samples: Int16Array, signal?: AbortSignal): Uint8Array {
   const encoder = new Mp3Encoder(1, TARGET_SAMPLE_RATE, MP3_BITRATE);
   const blockSize = 1152;
   const chunks: Uint8Array[] = [];
 
   for (let i = 0; i < samples.length; i += blockSize) {
+    assertNotAborted(signal);
     const chunk = samples.subarray(i, i + blockSize);
     const mp3buf = encoder.encodeBuffer(chunk);
     if (mp3buf.length > 0) chunks.push(new Uint8Array(mp3buf));
@@ -81,15 +88,18 @@ function replaceExtension(filename: string, ext: string): string {
   return `${filename.slice(0, dotIndex)}${ext}`;
 }
 
-export async function compressAudioFile(file: File): Promise<CompressResult> {
+export async function compressAudioFile(file: File, signal?: AbortSignal): Promise<CompressResult> {
+  assertNotAborted(signal);
   const arrayBuffer = await file.arrayBuffer();
+  assertNotAborted(signal);
   const audioContext = new AudioContext();
 
   try {
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    assertNotAborted(signal);
     const mono = resampleToMono16kHz(audioBuffer);
     const pcm = floatTo16BitPCM(mono);
-    const mp3Data = encodeMp3(pcm);
+    const mp3Data = encodeMp3(pcm, signal);
     const blob = new Blob([Uint8Array.from(mp3Data)], { type: 'audio/mpeg' });
 
     return {
@@ -102,10 +112,17 @@ export async function compressAudioFile(file: File): Promise<CompressResult> {
   }
 }
 
-export async function prepareAudioForUpload(file: File): Promise<CompressResult> {
+export async function prepareAudioForUpload(
+  file: File,
+  signal?: AbortSignal,
+): Promise<CompressResult> {
   try {
-    return await compressAudioFile(file);
-  } catch {
+    return await compressAudioFile(file, signal);
+  } catch (error) {
+    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      throw error;
+    }
+
     if (file.size > 25 * 1024 * 1024) {
       throw new Error(
         '音声ファイルを圧縮できず、サイズが25MBを超えています。別の形式で録音するか、短い録音をお試しください。',

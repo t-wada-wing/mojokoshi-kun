@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SCHOOLS } from '../constants';
 import {
   deleteRecord,
+  downloadAllZipUrl,
   downloadSelectedZipUrl,
   downloadUrl,
   downloadZipUrl,
@@ -232,6 +233,21 @@ export default function DownloadPage() {
     );
   };
 
+  const handleDownloadAll = async () => {
+    setActionMessage('全スクールのダウンロードを準備しています...');
+    try {
+      await startDownload(downloadAllZipUrl(passcode), '全スクール文字起こし.zip');
+      if (school) {
+        await loadRecords(school);
+      } else {
+        void loadUploadMonitor(passcode);
+      }
+      setActionMessage('全スクール一括ダウンロードが完了しました');
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : 'ダウンロードに失敗しました');
+    }
+  };
+
   const handleDownloadSelected = async () => {
     if (selectedRecords.length === 0) {
       setActionMessage('ダウンロードするファイルを選択してください');
@@ -341,6 +357,16 @@ export default function DownloadPage() {
         </section>
       ) : null}
       {monitorError ? <p className="field-error">{monitorError}</p> : null}
+
+      <div className="toolbar download-toolbar">
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => void handleDownloadAll()}
+        >
+          全スクールを一括ダウンロード (zip / スクール別フォルダ)
+        </button>
+      </div>
 
       <label>
         スクール

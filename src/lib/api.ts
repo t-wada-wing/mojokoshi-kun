@@ -251,6 +251,10 @@ export function downloadSelectedZipUrl(passcode: string, ids: number[]): string 
   return `/api/download?ids=${encodeURIComponent(ids.join(','))}&passcode=${encodeURIComponent(passcode)}`;
 }
 
+export function downloadAllZipUrl(passcode: string): string {
+  return `/api/download?all=1&passcode=${encodeURIComponent(passcode)}`;
+}
+
 export async function verifyPasscode(passcode: string): Promise<boolean> {
   const response = await fetch('/api/records?school=', {
     headers: {

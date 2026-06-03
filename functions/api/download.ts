@@ -50,15 +50,24 @@ async function markDownloaded(env: Env, ids: number[]): Promise<void> {
     .run();
 }
 
+function sanitizeFolderName(name: string): string {
+  const cleaned = name.replace(/[\\/:*?"<>|]/g, '_').trim();
+  return cleaned.length > 0 ? cleaned : '未分類';
+}
+
 function buildZipResponse(
   records: Array<Pick<TranscriptRecord, 'id' | 'filename' | 'school' | 'transcript'>>,
   zipFilename: string,
+  groupBySchool = false,
 ): Response {
   const usedNames = new Map<string, number>();
   const zipEntries: Record<string, Uint8Array> = {};
 
   for (const record of records) {
-    const zipName = uniqueZipName(record.filename, usedNames);
+    const baseName = groupBySchool
+      ? `${sanitizeFolderName(record.school)}/${record.filename}`
+      : record.filename;
+    const zipName = uniqueZipName(baseName, usedNames);
     zipEntries[zipName] = strToU8(record.transcript);
   }
 
@@ -81,6 +90,7 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
   const id = url.searchParams.get('id');
   const ids = parseIds(url.searchParams.get('ids'));
   const school = url.searchParams.get('school')?.trim();
+  const all = url.searchParams.get('all');
 
   try {
     await ensureSchema(env);
@@ -160,7 +170,27 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
       return response;
     }
 
-    return jsonResponse({ ok: false, error: 'id または school を指定してください' }, 400);
+    if (all) {
+      const result = await env.DB.prepare(
+        `SELECT id, school, filename, transcript
+         FROM transcripts
+         ORDER BY school ASC, created_at ASC, id ASC`,
+      ).all<Pick<TranscriptRecord, 'id' | 'school' | 'filename' | 'transcript'>>();
+
+      const records = result.results ?? [];
+      if (records.length === 0) {
+        return jsonResponse({ ok: false, error: '登録されている記録はありません' }, 404);
+      }
+
+      const response = buildZipResponse(records, '全スクール文字起こし.zip', true);
+      await markDownloaded(
+        env,
+        records.map((record) => record.id),
+      );
+      return response;
+    }
+
+    return jsonResponse({ ok: false, error: 'id / ids / school / all のいずれかを指定してください' }, 400);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'ダウンロードに失敗しました';
     return jsonResponse({ ok: false, error: message }, 500);

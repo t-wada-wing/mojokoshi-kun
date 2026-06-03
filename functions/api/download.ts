@@ -1,9 +1,8 @@
+import { zipSync, strToU8 } from 'fflate';
 import {
-  buildTranscriptZipResponse,
   contentDisposition,
   ensureSchema,
   jsonResponse,
-  parseDownloadIds,
   unauthorized,
   verifyPasscode,
   type Env,
@@ -13,6 +12,29 @@ import {
 interface PagesContext {
   request: Request;
   env: Env;
+}
+
+function uniqueZipName(filename: string, used: Map<string, number>): string {
+  const count = used.get(filename) ?? 0;
+  used.set(filename, count + 1);
+  if (count === 0) return filename;
+
+  const dotIndex = filename.lastIndexOf('.');
+  if (dotIndex === -1) return `${filename}_${count + 1}`;
+  const base = filename.slice(0, dotIndex);
+  const ext = filename.slice(dotIndex);
+  return `${base}_${count + 1}${ext}`;
+}
+
+function parseIds(value: string | null): number[] {
+  if (!value) return [];
+
+  const ids = value
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  return Array.from(new Set(ids));
 }
 
 async function markDownloaded(env: Env, ids: number[]): Promise<void> {
@@ -28,6 +50,26 @@ async function markDownloaded(env: Env, ids: number[]): Promise<void> {
     .run();
 }
 
+function buildZipResponse(
+  records: Array<Pick<TranscriptRecord, 'id' | 'filename' | 'school' | 'transcript'>>,
+  zipFilename: string,
+): Response {
+  const usedNames = new Map<string, number>();
+  const zipEntries: Record<string, Uint8Array> = {};
+
+  for (const record of records) {
+    const zipName = uniqueZipName(record.filename, usedNames);
+    zipEntries[zipName] = strToU8(record.transcript);
+  }
+
+  return new Response(zipSync(zipEntries), {
+    headers: {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': contentDisposition(zipFilename),
+    },
+  });
+}
+
 export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) => {
   const { request, env } = context;
 
@@ -37,7 +79,7 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
 
   const url = new URL(request.url);
   const id = url.searchParams.get('id');
-  const ids = parseDownloadIds(url.searchParams.get('ids'));
+  const ids = parseIds(url.searchParams.get('ids'));
   const school = url.searchParams.get('school')?.trim();
 
   try {
@@ -87,7 +129,7 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
       const zipFilename =
         schools.length === 1 ? `${schools[0]}_選択文字起こし.zip` : '選択文字起こし.zip';
 
-      const response = buildTranscriptZipResponse(records, zipFilename);
+      const response = buildZipResponse(records, zipFilename);
       await markDownloaded(
         env,
         records.map((record) => record.id),
@@ -110,7 +152,7 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
         return jsonResponse({ ok: false, error: 'このスクールの記録はありません' }, 404);
       }
 
-      const response = buildTranscriptZipResponse(records, `${school}_文字起こし.zip`);
+      const response = buildZipResponse(records, `${school}_文字起こし.zip`);
       await markDownloaded(
         env,
         records.map((record) => record.id),

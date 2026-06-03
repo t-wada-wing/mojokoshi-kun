@@ -39,12 +39,6 @@ export const LONG_AUDIO_HINT_SECONDS = 25 * 60;
 export const LONG_AUDIO_STATIC_HINT =
   '25分を超える音声は、圧縮と文字起こしに通常より時間がかかります。完了まで画面を閉じないでください。';
 
-/** 1回の一括AI分析の最大件数 */
-export const MAX_BULK_ANALYZE = 30;
-
-/** 1件あたりの分析APIタイムアウト（ミリ秒） */
-export const ANALYZE_TIMEOUT_MS = 120_000;
-
 export function formatDurationMinutes(seconds: number): number {
   return Math.max(1, Math.ceil(seconds / 60));
 }

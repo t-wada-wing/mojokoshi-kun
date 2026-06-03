@@ -1,45 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import AnalysisWorkspace, {
-  IDLE_DETAIL,
-  type DetailState,
-  type ListFilter,
-} from '../components/AnalysisWorkspace';
-import BlockingProgressOverlay from '../components/BlockingProgressOverlay';
-import { MAX_BULK_ANALYZE, SCHOOLS } from '../constants';
+import { SCHOOLS } from '../constants';
 import {
-  analyzeRecord,
   deleteRecord,
-  downloadAnalysisSelectedZipUrl,
-  downloadAnalysisZipUrl,
   downloadSelectedZipUrl,
   downloadUrl,
   downloadZipUrl,
-  fetchMonthlyUsage,
   fetchRecords,
   fetchUploadMonitor,
   verifyPasscode,
-  type MonthlyUsageResponse,
   type RecordItem,
   type UploadMonitorData,
 } from '../lib/api';
 
 const PASSCODE_STORAGE_KEY = 'transcribe-passcode';
-
-type DownloadTab = 'ai' | 'admin';
-
-type BatchProgressState = {
-  active: boolean;
-  message: string;
-  percent: number;
-  note: string;
-};
-
-const IDLE_BATCH_PROGRESS: BatchProgressState = {
-  active: false,
-  message: '',
-  percent: 0,
-  note: '',
-};
 
 function parseServerDate(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -59,6 +32,10 @@ function formatDateTime(value: string | null | undefined): string {
     timeStyle: 'short',
     timeZone: 'Asia/Tokyo',
   }).format(date);
+}
+
+function dateTimeValue(value: string | null | undefined): number {
+  return parseServerDate(value)?.getTime() ?? 0;
 }
 
 function formatBytes(value: number): string {
@@ -122,63 +99,30 @@ export default function DownloadPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [uploadMonitor, setUploadMonitor] = useState<UploadMonitorData | null>(null);
   const [monitorError, setMonitorError] = useState('');
-  const [monthlyUsage, setMonthlyUsage] = useState<MonthlyUsageResponse | null>(null);
-  const [usageError, setUsageError] = useState('');
-  const [batchProgress, setBatchProgress] = useState<BatchProgressState>(IDLE_BATCH_PROGRESS);
-  const batchBusy = batchProgress.active;
-  const [activeTab, setActiveTab] = useState<DownloadTab>('ai');
-  const [adminLoaded, setAdminLoaded] = useState(false);
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [selectedDetailId, setSelectedDetailId] = useState<number | null>(null);
-  const [detail, setDetail] = useState<DetailState>(IDLE_DETAIL);
-  const [listFilter, setListFilter] = useState<ListFilter>('all');
 
   const selectedRecords = useMemo(
     () => records.filter((record) => selectedIds.has(record.id)),
     [records, selectedIds],
   );
 
-  const unanalyzedRecords = useMemo(
-    () => records.filter((record) => !record.analyzed_at),
+  const latestDownloads = useMemo(
+    () =>
+      [...records]
+        .filter((record) => record.downloaded_at)
+        .sort((a, b) => dateTimeValue(b.downloaded_at) - dateTimeValue(a.downloaded_at))
+        .slice(0, 5),
     [records],
   );
-  const selectedUnanalyzedRecords = useMemo(
-    () => selectedRecords.filter((record) => !record.analyzed_at),
-    [selectedRecords],
-  );
-  const analyzedRecords = useMemo(
-    () => records.filter((record) => record.analyzed_at),
-    [records],
-  );
-  const selectedAnalyzedRecords = useMemo(
-    () => selectedRecords.filter((record) => record.analyzed_at),
-    [selectedRecords],
-  );
 
-  const filteredRecords = useMemo(() => {
-    if (listFilter === 'unanalyzed') {
-      return records.filter((record) => !record.analyzed_at);
-    }
-    if (listFilter === 'analyzed') {
-      return records.filter((record) => record.analyzed_at);
-    }
-    return records;
-  }, [records, listFilter]);
-
-  const allFilteredSelected =
-    filteredRecords.length > 0 &&
-    filteredRecords.every((record) => selectedIds.has(record.id));
-
-  const selectedDetailRecord = useMemo(
-    () => records.find((record) => record.id === selectedDetailId) ?? null,
-    [records, selectedDetailId],
-  );
+  const allSelected = records.length > 0 && records.every((record) => selectedIds.has(record.id));
+  const undownloadedCount = records.filter((record) => !record.downloaded_at).length;
 
   useEffect(() => {
     const saved = sessionStorage.getItem(PASSCODE_STORAGE_KEY);
     if (saved) {
       setPasscode(saved);
       setAuthenticated(true);
+      void loadUploadMonitor(saved);
     }
   }, []);
 
@@ -193,39 +137,6 @@ export default function DownloadPage() {
     }
   };
 
-  const loadMonthlyUsage = async (targetPasscode = passcode) => {
-    try {
-      const usage = await fetchMonthlyUsage(targetPasscode);
-      setMonthlyUsage(usage);
-      setUsageError('');
-    } catch (error) {
-      setMonthlyUsage(null);
-      setUsageError(error instanceof Error ? error.message : '利用料金の取得に失敗しました');
-    }
-  };
-
-  const refreshAdminPanels = async (targetPasscode = passcode) => {
-    await Promise.all([loadUploadMonitor(targetPasscode), loadMonthlyUsage(targetPasscode)]);
-  };
-
-  const loadAdminPanels = async (targetPasscode = passcode) => {
-    setAdminLoading(true);
-    try {
-      await refreshAdminPanels(targetPasscode);
-      setAdminLoaded(true);
-    } finally {
-      setAdminLoading(false);
-    }
-  };
-
-  const handleTabChange = (tab: DownloadTab) => {
-    if (batchBusy) return;
-    setActiveTab(tab);
-    if (tab === 'admin' && !adminLoaded && !adminLoading) {
-      void loadAdminPanels(passcode);
-    }
-  };
-
   const handleAuth = async (event: React.FormEvent) => {
     event.preventDefault();
     setAuthError('');
@@ -237,58 +148,33 @@ export default function DownloadPage() {
     }
     sessionStorage.setItem(PASSCODE_STORAGE_KEY, passcode);
     setAuthenticated(true);
-    setActiveTab('ai');
-    setAdminLoaded(false);
+    void loadUploadMonitor(passcode);
   };
 
-  const loadRecords = async (selectedSchool: string): Promise<RecordItem[]> => {
+  const loadRecords = async (selectedSchool: string) => {
     setSchool(selectedSchool);
     setLoading(true);
     setListError('');
     setActionMessage('');
-    setSelectedDetailId(null);
-    setDetail(IDLE_DETAIL);
-    setListFilter('all');
     try {
       const items = await fetchRecords(passcode, selectedSchool);
       setRecords(items);
       setSelectedIds(new Set());
-      return items;
+      void loadUploadMonitor(passcode);
     } catch (error) {
       setRecords([]);
       setSelectedIds(new Set());
       setListError(error instanceof Error ? error.message : '一覧の取得に失敗しました');
-      return [];
     } finally {
       setLoading(false);
     }
   };
 
-  const refreshRecordsInPlace = async (): Promise<RecordItem[]> => {
-    if (!school) return [];
-    try {
-      const items = await fetchRecords(passcode, school);
-      setRecords(items);
-      if (adminLoaded) {
-        void refreshAdminPanels(passcode);
-      }
-      return items;
-    } catch (error) {
-      setListError(error instanceof Error ? error.message : '一覧の取得に失敗しました');
-      return [];
-    }
-  };
-
   const handleDelete = async (id: number) => {
-    if (batchBusy) return;
     if (!window.confirm('この記録を削除しますか？')) return;
     try {
       await deleteRecord(passcode, id);
       setActionMessage('削除しました');
-      if (selectedDetailId === id) {
-        setSelectedDetailId(null);
-        setDetail(IDLE_DETAIL);
-      }
       if (school) {
         await loadRecords(school);
       }
@@ -297,61 +183,19 @@ export default function DownloadPage() {
     }
   };
 
-  const handleDeleteSelected = async () => {
-    if (batchBusy || selectedRecords.length === 0) return;
-    if (!window.confirm(`選択した ${selectedRecords.length} 件を削除しますか？`)) return;
-    try {
-      for (const record of selectedRecords) {
-        await deleteRecord(passcode, record.id);
-      }
-      setActionMessage(`${selectedRecords.length}件を削除しました`);
-      setSelectedDetailId(null);
-      setDetail(IDLE_DETAIL);
-      if (school) {
-        await loadRecords(school);
-      }
-    } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : '削除に失敗しました');
-    }
-  };
-
-  const beginBatch = (message: string, note: string) => {
-    setBatchProgress({
-      active: true,
-      message,
-      percent: 0,
-      note,
-    });
-  };
-
-  const updateBatch = (message: string, percent: number) => {
-    setBatchProgress((current) => ({
-      ...current,
-      active: true,
-      message,
-      percent: Math.min(100, Math.max(0, percent)),
-    }));
-  };
-
-  const endBatch = () => {
-    setBatchProgress(IDLE_BATCH_PROGRESS);
+  const refreshAfterDownload = async (message: string) => {
+    if (!school) return;
+    await loadRecords(school);
+    setActionMessage(message);
   };
 
   const runDownload = async (href: string, fallbackFilename: string, message: string) => {
-    beginBatch('ダウンロードを準備しています...', 'zip の作成が完了するまでお待ちください');
+    setActionMessage('ダウンロードを準備しています...');
     try {
-      updateBatch('ファイルを取得しています...', 30);
       await startDownload(href, fallbackFilename);
-      updateBatch('一覧を更新しています...', 85);
-      if (school) {
-        await refreshRecordsInPlace();
-      }
-      setActionMessage(message);
-      updateBatch('ダウンロードが完了しました', 100);
+      await refreshAfterDownload(message);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : 'ダウンロードに失敗しました');
-    } finally {
-      endBatch();
     }
   };
 
@@ -367,12 +211,20 @@ export default function DownloadPage() {
     });
   };
 
+  const selectAll = () => {
+    setSelectedIds(new Set(records.map((record) => record.id)));
+  };
+
+  const selectUndownloaded = () => {
+    setSelectedIds(new Set(records.filter((record) => !record.downloaded_at).map((record) => record.id)));
+  };
+
   const clearSelection = () => {
     setSelectedIds(new Set());
   };
 
   const handleDownloadSchool = async () => {
-    if (!school || batchBusy) return;
+    if (!school) return;
     await runDownload(
       downloadZipUrl(passcode, school),
       `${school}_文字起こし.zip`,
@@ -381,7 +233,6 @@ export default function DownloadPage() {
   };
 
   const handleDownloadSelected = async () => {
-    if (batchBusy) return;
     if (selectedRecords.length === 0) {
       setActionMessage('ダウンロードするファイルを選択してください');
       return;
@@ -397,34 +248,7 @@ export default function DownloadPage() {
     );
   };
 
-  const handleDownloadAnalysisSchool = async () => {
-    if (!school || batchBusy) return;
-    await runDownload(
-      downloadAnalysisZipUrl(passcode, school),
-      `${school}_AI分析.zip`,
-      '分析結果をダウンロードしました',
-    );
-  };
-
-  const handleDownloadAnalysisSelected = async () => {
-    if (batchBusy) return;
-    if (selectedAnalyzedRecords.length === 0) {
-      setActionMessage('ダウンロードする分析結果を選択してください');
-      return;
-    }
-
-    await runDownload(
-      downloadAnalysisSelectedZipUrl(
-        passcode,
-        selectedAnalyzedRecords.map((record) => record.id),
-      ),
-      school ? `${school}_選択AI分析.zip` : '選択AI分析.zip',
-      `${selectedAnalyzedRecords.length}件の分析結果をダウンロードしました`,
-    );
-  };
-
   const handleDownloadRecord = async (record: RecordItem) => {
-    if (batchBusy) return;
     await runDownload(
       downloadUrl(passcode, record.id),
       record.filename,
@@ -432,217 +256,10 @@ export default function DownloadPage() {
     );
   };
 
-  const analysisFilename = (filename: string) => filename.replace(/\.txt$/i, '_分析.txt');
-
-  const selectRecord = async (record: RecordItem) => {
-    if (batchBusy) return;
-    setSelectedDetailId(record.id);
-    if (!record.analyzed_at) {
-      setDetail({ recordId: record.id, content: '', loading: false, cached: false, error: '' });
-      return;
-    }
-    setDetail({ recordId: record.id, content: '', loading: true, cached: false, error: '' });
-    try {
-      const result = await analyzeRecord(passcode, record.id);
-      setDetail({
-        recordId: record.id,
-        content: result.analysis,
-        loading: false,
-        cached: result.cached,
-        error: '',
-      });
-    } catch (error) {
-      setDetail({
-        recordId: record.id,
-        content: '',
-        loading: false,
-        cached: false,
-        error: error instanceof Error ? error.message : '分析結果の取得に失敗しました',
-      });
-    }
-  };
-
-  const handleRunAnalysis = async (record: RecordItem) => {
-    if (batchBusy) return;
-    setSelectedDetailId(record.id);
-    setDetail({ recordId: record.id, content: '', loading: true, cached: false, error: '' });
-    try {
-      const result = await analyzeRecord(passcode, record.id);
-      setDetail({
-        recordId: record.id,
-        content: result.analysis,
-        loading: false,
-        cached: result.cached,
-        error: '',
-      });
-      await refreshRecordsInPlace();
-    } catch (error) {
-      setDetail({
-        recordId: record.id,
-        content: '',
-        loading: false,
-        cached: false,
-        error: error instanceof Error ? error.message : '分析に失敗しました',
-      });
-      setActionMessage(error instanceof Error ? error.message : '分析に失敗しました');
-    }
-  };
-
-  const handleReanalyze = async (record: RecordItem) => {
-    if (batchBusy) return;
-    setSelectedDetailId(record.id);
-    setDetail({ recordId: record.id, content: '', loading: true, cached: false, error: '' });
-    try {
-      const result = await analyzeRecord(passcode, record.id, { force: true });
-      setDetail({
-        recordId: record.id,
-        content: result.analysis,
-        loading: false,
-        cached: result.cached,
-        error: '',
-      });
-      await refreshRecordsInPlace();
-    } catch (error) {
-      setDetail({
-        recordId: record.id,
-        content: '',
-        loading: false,
-        cached: false,
-        error: error instanceof Error ? error.message : '再分析に失敗しました',
-      });
-      setActionMessage(error instanceof Error ? error.message : '再分析に失敗しました');
-    }
-  };
-
-  const runBulkAnalyze = async (targets: RecordItem[], scopeLabel: string) => {
-    beginBatch(`AI一括分析を開始しています（${scopeLabel}）...`, '分析が完了するまでお待ちください');
-    let success = 0;
-    let failed = 0;
-
-    try {
-      for (let index = 0; index < targets.length; index += 1) {
-        const record = targets[index];
-        const percent =
-          targets.length > 0 ? Math.round(((index + 1) / targets.length) * 90) : 0;
-        updateBatch(
-          `AI一括分析中（${scopeLabel}）... ${index + 1}/${targets.length}（${record.student_name}）`,
-          percent,
-        );
-        try {
-          await analyzeRecord(passcode, record.id);
-          success += 1;
-        } catch {
-          failed += 1;
-        }
-      }
-
-      updateBatch('一覧を更新しています...', 95);
-      const items = await loadRecords(school);
-      if (adminLoaded) {
-        void refreshAdminPanels(passcode);
-      }
-      setActionMessage(
-        `一括分析が完了しました（成功 ${success}件 / 失敗 ${failed}件）。右の詳細ペインで確認できます。1回最大 ${MAX_BULK_ANALYZE} 件まで実行できます。`,
-      );
-      if (success > 0) {
-        const firstAnalyzed =
-          items.find((item) => targets.some((target) => target.id === item.id && item.analyzed_at)) ??
-          items.find((item) => item.analyzed_at);
-        if (firstAnalyzed) {
-          await selectRecord(firstAnalyzed);
-        }
-      }
-      updateBatch('一括分析が完了しました', 100);
-    } finally {
-      endBatch();
-    }
-  };
-
-  const handleBulkAnalyzeSchool = async () => {
-    if (!school || batchBusy) return;
-
-    const targets = unanalyzedRecords.slice(0, MAX_BULK_ANALYZE);
-    if (targets.length === 0) {
-      setActionMessage('未分析の記録がありません');
-      return;
-    }
-
-    if (unanalyzedRecords.length > MAX_BULK_ANALYZE) {
-      const proceed = window.confirm(
-        `未分析が ${unanalyzedRecords.length} 件あります。1回の一括分析は最大 ${MAX_BULK_ANALYZE} 件までです。\n今回 ${targets.length} 件を分析します。続行しますか？`,
-      );
-      if (!proceed) return;
-    }
-
-    await runBulkAnalyze(targets, 'スクール一括');
-  };
-
-  const handleBulkAnalyzeSelected = async () => {
-    if (!school || batchBusy) return;
-
-    if (selectedRecords.length === 0) {
-      setActionMessage('分析するファイルを選択してください');
-      return;
-    }
-
-    const targets = selectedUnanalyzedRecords.slice(0, MAX_BULK_ANALYZE);
-    if (targets.length === 0) {
-      setActionMessage('選択した記録はすべて分析済みです');
-      return;
-    }
-
-    if (selectedUnanalyzedRecords.length > MAX_BULK_ANALYZE) {
-      const proceed = window.confirm(
-        `選択した未分析が ${selectedUnanalyzedRecords.length} 件あります。1回の一括分析は最大 ${MAX_BULK_ANALYZE} 件までです。\n今回 ${targets.length} 件を分析します。続行しますか？`,
-      );
-      if (!proceed) return;
-    }
-
-    await runBulkAnalyze(targets, '選択分');
-  };
-
-  const handleCopyAnalysis = async () => {
-    if (!detail.content) return;
-    try {
-      await navigator.clipboard.writeText(detail.content);
-      setActionMessage('分析結果をコピーしました');
-    } catch {
-      setActionMessage('コピーに失敗しました');
-    }
-  };
-
-  const handleDownloadAnalysisTxt = () => {
-    if (!detail.content || !selectedDetailRecord) return;
-    const blob = new Blob([detail.content], { type: 'text/plain;charset=utf-8' });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = analysisFilename(selectedDetailRecord.filename);
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-    setActionMessage('分析結果をダウンロードしました');
-  };
-
-  const selectAllFiltered = () => {
-    setSelectedIds(new Set(filteredRecords.map((record) => record.id)));
-  };
-
-  const formatMonthLabel = (month: string) => {
-    const [year, mon] = month.split('-');
-    return `${year}年${Number(mon)}月`;
-  };
-
-  const formatYen = (value: number) =>
-    new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(value);
-
-  const formatUsd = (value: number) => `$${value.toFixed(4)}`;
-
   if (!authenticated) {
     return (
       <section className="card narrow">
-        <h2>分析</h2>
+        <h2>ダウンロード / 管理</h2>
         <p className="lead">パスコードを入力してください。</p>
         <form className="form-grid" onSubmit={handleAuth}>
           <label>
@@ -667,17 +284,12 @@ export default function DownloadPage() {
     <section className="card">
       <div className="section-header">
         <div>
-          <h2>分析</h2>
-          <p className="lead">
-            {activeTab === 'ai'
-              ? 'スクールを選び、左の一覧で面談を選ぶと右に分析結果とダウンロード操作が表示されます（PC向け）。'
-              : '利用料金の目安とアップロード監視を確認できます。'}
-          </p>
+          <h2>ダウンロード / 管理</h2>
+          <p className="lead">スクールを選択して文字起こし結果を確認・ダウンロードできます。</p>
         </div>
         <button
           type="button"
           className="secondary-button"
-          disabled={batchBusy}
           onClick={() => {
             sessionStorage.removeItem(PASSCODE_STORAGE_KEY);
             setAuthenticated(false);
@@ -685,159 +297,13 @@ export default function DownloadPage() {
             setSchool('');
             setRecords([]);
             setSelectedIds(new Set());
-            setSelectedDetailId(null);
-            setDetail(IDLE_DETAIL);
             setUploadMonitor(null);
             setMonitorError('');
-            setMonthlyUsage(null);
-            setUsageError('');
-            setActiveTab('ai');
-            setAdminLoaded(false);
-            setAdminLoading(false);
           }}
         >
           ログアウト
         </button>
       </div>
-
-      <div className="download-tabs" role="tablist" aria-label="分析メニュー">
-        <button
-          type="button"
-          role="tab"
-          id="download-tab-ai"
-          aria-selected={activeTab === 'ai'}
-          aria-controls="download-panel-ai"
-          className={`download-tab${activeTab === 'ai' ? ' active' : ''}`}
-          disabled={batchBusy}
-          onClick={() => handleTabChange('ai')}
-        >
-          AI分析
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="download-tab-admin"
-          aria-selected={activeTab === 'admin'}
-          aria-controls="download-panel-admin"
-          className={`download-tab${activeTab === 'admin' ? ' active' : ''}`}
-          disabled={batchBusy}
-          onClick={() => handleTabChange('admin')}
-        >
-          管理
-        </button>
-      </div>
-
-      {activeTab === 'ai' ? (
-        <div id="download-panel-ai" role="tabpanel" aria-labelledby="download-tab-ai">
-      <label>
-        スクール
-        <select
-          value={school}
-          disabled={batchBusy || loading}
-          onChange={(e) => void loadRecords(e.target.value)}
-        >
-          <option value="">選択してください</option>
-          {SCHOOLS.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {loading ? <p>読み込み中...</p> : null}
-      {listError ? <p className="field-error">{listError}</p> : null}
-      {actionMessage ? <p className="field-hint">{actionMessage}</p> : null}
-
-      {school && records.length > 0 ? (
-        <AnalysisWorkspace
-          records={records}
-          filteredRecords={filteredRecords}
-          listFilter={listFilter}
-          onListFilterChange={setListFilter}
-          selectedIds={selectedIds}
-          selectedDetailId={selectedDetailId}
-          selectedDetailRecord={selectedDetailRecord}
-          detail={detail}
-          batchBusy={batchBusy}
-          analyzedCount={analyzedRecords.length}
-          unanalyzedCount={unanalyzedRecords.length}
-          selectedRecordsCount={selectedRecords.length}
-          selectedUnanalyzedCount={selectedUnanalyzedRecords.length}
-          selectedAnalyzedCount={selectedAnalyzedRecords.length}
-          allFilteredSelected={allFilteredSelected}
-          onToggleRecord={toggleRecord}
-          onSelectAllFiltered={selectAllFiltered}
-          onClearSelection={clearSelection}
-          onSelectRecord={selectRecord}
-          onBackToList={() => setSelectedDetailId(null)}
-          onBulkAnalyzeSelected={() => void handleBulkAnalyzeSelected()}
-          onBulkAnalyzeSchool={() => void handleBulkAnalyzeSchool()}
-          onDownloadSchoolTranscript={() => void handleDownloadSchool()}
-          onDownloadSelectedTranscript={() => void handleDownloadSelected()}
-          onDownloadSchoolAnalysis={() => void handleDownloadAnalysisSchool()}
-          onDownloadSelectedAnalysis={() => void handleDownloadAnalysisSelected()}
-          onDeleteSelected={() => void handleDeleteSelected()}
-          onRunAnalysis={(record) => void handleRunAnalysis(record)}
-          onReanalyze={(record) => void handleReanalyze(record)}
-          onCopyAnalysis={() => void handleCopyAnalysis()}
-          onDownloadAnalysisTxt={handleDownloadAnalysisTxt}
-          onDownloadTranscript={(record) => void handleDownloadRecord(record)}
-          onDeleteRecord={(id) => void handleDelete(id)}
-          formatDateTime={formatDateTime}
-        />
-      ) : null}
-
-      {school && !loading && records.length === 0 && !listError ? (
-        <p className="field-hint">このスクールの記録はまだありません。</p>
-      ) : null}
-        </div>
-      ) : null}
-
-      {activeTab === 'admin' ? (
-        <div id="download-panel-admin" role="tabpanel" aria-labelledby="download-tab-admin">
-      {adminLoading ? <p className="field-hint">管理データを読み込み中...</p> : null}
-
-      <section className="usage-panel" aria-live="polite">
-        <div className="history-header">
-          <h3>月別 推定利用料金（目安）</h3>
-          {monthlyUsage ? <span>為替目安: 1USD = {monthlyUsage.usdJpyRate}円</span> : null}
-        </div>
-        {monthlyUsage ? (
-          <>
-            <p className="field-hint">{monthlyUsage.disclaimer}</p>
-            {monthlyUsage.months.length > 0 ? (
-              <table className="usage-table">
-                <thead>
-                  <tr>
-                    <th>月</th>
-                    <th>文字起こし</th>
-                    <th>AI分析</th>
-                    <th>合計(円)</th>
-                    <th>合計(USD)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {monthlyUsage.months.map((row) => (
-                    <tr key={row.month}>
-                      <td>{formatMonthLabel(row.month)}</td>
-                      <td>{formatYen(row.transcribeUsd * monthlyUsage.usdJpyRate)}</td>
-                      <td>{formatYen(row.analyzeUsd * monthlyUsage.usdJpyRate)}</td>
-                      <td>{formatYen(row.totalJpy)}</td>
-                      <td>{formatUsd(row.totalUsd)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <p className="field-hint">まだ集計データがありません。</p>
-            )}
-          </>
-        ) : (
-          <p className="field-hint">利用料金を読み込み中...</p>
-        )}
-        {usageError ? <p className="field-error">{usageError}</p> : null}
-      </section>
 
       {uploadMonitor ? (
         <section className="upload-monitor" aria-live="polite">
@@ -858,21 +324,7 @@ export default function DownloadPage() {
               <strong>{formatBytes(uploadMonitor.limits.maxFileBytes)}</strong>
               <span>ファイル上限</span>
             </p>
-            {uploadMonitor.analysisToday ? (
-              <p>
-                <strong>{uploadMonitor.analysisToday.count}</strong>
-                <span>
-                  本日の分析（約{formatYen(uploadMonitor.analysisToday.estimatedJpy)}）
-                </span>
-              </p>
-            ) : null}
           </div>
-          {uploadMonitor.analysisLimits ? (
-            <p className="field-hint">
-              AI分析の上限: 1時間あたり {uploadMonitor.analysisLimits.maxPerIpHour}件 / 1日全体{' '}
-              {uploadMonitor.analysisLimits.maxGlobalDay}件
-            </p>
-          ) : null}
           {uploadMonitor.alerts.length > 0 ? (
             <ol className="monitor-alerts">
               {uploadMonitor.alerts.slice(0, 3).map((alert) => (
@@ -889,16 +341,148 @@ export default function DownloadPage() {
         </section>
       ) : null}
       {monitorError ? <p className="field-error">{monitorError}</p> : null}
+
+      <label>
+        スクール
+        <select value={school} onChange={(e) => loadRecords(e.target.value)}>
+          <option value="">選択してください</option>
+          {SCHOOLS.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {school ? (
+        <div className="toolbar download-toolbar">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void handleDownloadSchool()}
+          >
+            このスクールを一括ダウンロード (zip)
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => void handleDownloadSelected()}
+            disabled={selectedRecords.length === 0}
+          >
+            選択したファイルをダウンロード (zip)
+          </button>
         </div>
       ) : null}
 
-      <BlockingProgressOverlay
-        open={batchProgress.active}
-        message={batchProgress.message}
-        percent={batchProgress.percent}
-        note={batchProgress.note}
-      />
+      {school ? (
+        <div className="download-history" aria-live="polite">
+          <div className="history-header">
+            <h3>最新のダウンロード履歴</h3>
+            <span>{latestDownloads.length > 0 ? `${latestDownloads.length}件表示` : '履歴なし'}</span>
+          </div>
+          {latestDownloads.length > 0 ? (
+            <ol>
+              {latestDownloads.map((record) => (
+                <li key={record.id}>
+                  <span>
+                    {record.student_name} / {record.filename}
+                  </span>
+                  <time>{formatDateTime(record.downloaded_at)}</time>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="field-hint">このスクールのダウンロード履歴はまだありません。</p>
+          )}
+        </div>
+      ) : null}
 
+      {loading ? <p>読み込み中...</p> : null}
+      {listError ? <p className="field-error">{listError}</p> : null}
+      {actionMessage ? <p className="field-hint">{actionMessage}</p> : null}
+
+      {records.length > 0 ? (
+        <>
+          <div className="selection-toolbar">
+            <p>
+              {selectedRecords.length}件選択中 / {records.length}件
+              {undownloadedCount > 0 ? `（未ダウンロード ${undownloadedCount}件）` : ''}
+            </p>
+            <div>
+              <button type="button" className="secondary-button" onClick={selectAll} disabled={allSelected}>
+                一括チェック
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={selectUndownloaded}
+                disabled={undownloadedCount === 0}
+              >
+                未ダウンロードを選択
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={clearSelection}
+                disabled={selectedRecords.length === 0}
+              >
+                一括解除
+              </button>
+            </div>
+          </div>
+
+          <div className="record-list">
+            {records.map((record) => (
+              <article
+                key={record.id}
+                className={`record-item${selectedIds.has(record.id) ? ' selected' : ''}`}
+              >
+                <label className="record-select">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(record.id)}
+                    onChange={() => toggleRecord(record.id)}
+                    aria-label={`${record.filename}を選択`}
+                  />
+                  <span>選択</span>
+                </label>
+                <div className="record-content">
+                  <strong>{record.student_name}</strong>
+                  <p>
+                    {record.grade} / {record.class} / {record.filename}
+                  </p>
+                  <p className="record-date">登録: {formatDateTime(record.created_at)}</p>
+                  <p className={`download-status${record.downloaded_at ? ' downloaded' : ''}`}>
+                    {record.downloaded_at
+                      ? `最終DL: ${formatDateTime(record.downloaded_at)}`
+                      : '未ダウンロード'}
+                  </p>
+                </div>
+                <div className="record-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void handleDownloadRecord(record)}
+                  >
+                    txt
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => handleDelete(record.id)}
+                  >
+                    削除
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {school && !loading && records.length === 0 && !listError ? (
+        <p className="field-hint">このスクールの記録はまだありません。</p>
+      ) : null}
     </section>
   );
 }

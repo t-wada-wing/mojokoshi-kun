@@ -6,15 +6,6 @@ interface Env {
   OPENAI_API_KEY: string;
   DOWNLOAD_PASSCODE: string;
   TRANSCRIBE_MODEL?: string;
-  UPLOAD_MAX_PER_IP_HOUR?: string;
-  UPLOAD_MAX_PER_IP_DAY?: string;
-  UPLOAD_MAX_GLOBAL_DAY?: string;
-  UPLOAD_MAX_FILE_MB?: string;
-  ANALYSIS_MODEL?: string;
-  ANALYZE_MAX_GLOBAL_DAY?: string;
-  ANALYZE_MAX_PER_IP_HOUR?: string;
-  ANALYZE_MAX_INPUT_CHARS?: string;
-  USD_JPY_RATE?: string;
 }
 
 type PagesFunction<E = Env> = (context: {

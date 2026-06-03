@@ -4,8 +4,6 @@ export interface UploadProgress {
   message: string;
 }
 
-import { ANALYZE_TIMEOUT_MS } from '../constants';
-
 export interface UploadResult {
   ok: boolean;
   filename?: string;
@@ -148,28 +146,6 @@ export interface RecordItem {
   filename: string;
   created_at: string;
   downloaded_at: string | null;
-  analyzed_at: string | null;
-}
-
-export interface AnalyzeResult {
-  analysis: string;
-  cached: boolean;
-  analyzed_at: string | null;
-  model: string;
-}
-
-export interface MonthlyUsage {
-  month: string;
-  transcribeUsd: number;
-  analyzeUsd: number;
-  totalUsd: number;
-  totalJpy: number;
-}
-
-export interface MonthlyUsageResponse {
-  months: MonthlyUsage[];
-  usdJpyRate: number;
-  disclaimer: string;
 }
 
 export interface UploadMonitorAlert {
@@ -193,24 +169,12 @@ export interface UploadMonitorData {
     rejectedCount: number;
     failedCount: number;
   };
-  analysisToday?: {
-    count: number;
-    inputTokens: number;
-    outputTokens: number;
-    estimatedUsd: number;
-    estimatedJpy: number;
-  };
   alerts: UploadMonitorAlert[];
   limits: {
     maxPerIpHour: number;
     maxPerIpDay: number;
     maxGlobalDay: number;
     maxFileBytes: number;
-  };
-  analysisLimits?: {
-    maxPerIpHour: number;
-    maxGlobalDay: number;
-    maxInputChars: number;
   };
 }
 
@@ -245,10 +209,8 @@ export async function fetchUploadMonitor(passcode: string): Promise<UploadMonito
   const data = (await response.json()) as {
     ok: boolean;
     summary?: UploadMonitorData['summary'];
-    analysisToday?: UploadMonitorData['analysisToday'];
     alerts?: UploadMonitorAlert[];
     limits?: UploadMonitorData['limits'];
-    analysisLimits?: UploadMonitorData['analysisLimits'];
     error?: string;
   };
 
@@ -258,83 +220,8 @@ export async function fetchUploadMonitor(passcode: string): Promise<UploadMonito
 
   return {
     summary: data.summary,
-    analysisToday: data.analysisToday,
     alerts: data.alerts,
     limits: data.limits,
-    analysisLimits: data.analysisLimits,
-  };
-}
-
-export async function analyzeRecord(
-  passcode: string,
-  id: number,
-  options?: { force?: boolean; signal?: AbortSignal },
-): Promise<AnalyzeResult> {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), ANALYZE_TIMEOUT_MS);
-
-  if (options?.signal) {
-    options.signal.addEventListener('abort', () => controller.abort(), { once: true });
-  }
-
-  try {
-    const response = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Passcode': passcode,
-      },
-      body: JSON.stringify({ id, force: options?.force ?? false }),
-      signal: controller.signal,
-    });
-
-    const data = (await response.json()) as {
-      ok: boolean;
-      analysis?: string;
-      cached?: boolean;
-      analyzed_at?: string | null;
-      model?: string;
-      error?: string;
-    };
-
-    if (!response.ok || !data.ok || !data.analysis) {
-      throw new Error(data.error ?? `分析に失敗しました (${response.status})`);
-    }
-
-    return {
-      analysis: data.analysis,
-      cached: Boolean(data.cached),
-      analyzed_at: data.analyzed_at ?? null,
-      model: data.model ?? 'gpt-4o-mini',
-    };
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-}
-
-export async function fetchMonthlyUsage(passcode: string): Promise<MonthlyUsageResponse> {
-  const response = await fetch('/api/usage', {
-    headers: {
-      'X-Passcode': passcode,
-    },
-  });
-
-  const data = (await response.json()) as {
-    ok: boolean;
-    months?: MonthlyUsage[];
-    usdJpyRate?: number;
-    disclaimer?: string;
-    error?: string;
-  };
-
-  if (!response.ok || !data.ok || !data.months) {
-    throw new Error(data.error ?? '利用料金の取得に失敗しました');
-  }
-
-  return {
-    months: data.months,
-    usdJpyRate: data.usdJpyRate ?? 150,
-    disclaimer: data.disclaimer ?? '',
   };
 }
 
@@ -362,14 +249,6 @@ export function downloadZipUrl(passcode: string, school: string): string {
 
 export function downloadSelectedZipUrl(passcode: string, ids: number[]): string {
   return `/api/download?ids=${encodeURIComponent(ids.join(','))}&passcode=${encodeURIComponent(passcode)}`;
-}
-
-export function downloadAnalysisZipUrl(passcode: string, school: string): string {
-  return `/api/download-analysis?school=${encodeURIComponent(school)}&passcode=${encodeURIComponent(passcode)}`;
-}
-
-export function downloadAnalysisSelectedZipUrl(passcode: string, ids: number[]): string {
-  return `/api/download-analysis?ids=${encodeURIComponent(ids.join(','))}&passcode=${encodeURIComponent(passcode)}`;
 }
 
 export async function verifyPasscode(passcode: string): Promise<boolean> {

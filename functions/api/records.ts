@@ -21,7 +21,7 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
     }
 
     const result = await env.DB.prepare(
-      `SELECT id, school, grade, class, student_name, filename, created_at, downloaded_at, analyzed_at
+      `SELECT id, school, grade, class, student_name, filename, created_at, downloaded_at
        FROM transcripts
        WHERE school = ?
        ORDER BY created_at DESC, id DESC`,
@@ -36,7 +36,6 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
         filename: string;
         created_at: string;
         downloaded_at: string | null;
-        analyzed_at: string | null;
       }>();
 
     return jsonResponse({

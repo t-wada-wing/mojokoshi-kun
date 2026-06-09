@@ -5,3 +5,9 @@ UPLOAD_MAX_PER_IP_HOUR=12
 UPLOAD_MAX_PER_IP_DAY=40
 UPLOAD_MAX_GLOBAL_DAY=150
 UPLOAD_MAX_FILE_MB=25
+
+# アップロード完了メール通知（SendGrid）
+MAIL_API_KEY=
+MAIL_FROM=文字起こしくん <noreply@example.com>
+NOTIFY_EMAIL_TO=t-narazaki@rensei.co.jp,t-wada@rensei.co.jp
+APP_BASE_URL=http://localhost:5173

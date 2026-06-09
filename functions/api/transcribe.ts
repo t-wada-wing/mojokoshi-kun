@@ -8,6 +8,7 @@ import {
   jsonResponse,
   recordUploadAlert,
   recordUploadEvent,
+  sendUploadNotification,
   transcribeAudioInChunks,
   updateUploadEventStatus,
   type Env,
@@ -16,10 +17,11 @@ import {
 interface PagesContext {
   request: Request;
   env: Env;
+  waitUntil: (promise: Promise<unknown>) => void;
 }
 
 export const onRequestPost: PagesFunction<Env> = async (context: PagesContext) => {
-  const { request, env } = context;
+  const { request, env, waitUntil } = context;
 
   if (!env.OPENAI_API_KEY) {
     return jsonResponse({ ok: false, error: 'OPENAI_API_KEY が設定されていません' }, 500);
@@ -135,6 +137,19 @@ export const onRequestPost: PagesFunction<Env> = async (context: PagesContext) =
       .first<{ id: number }>();
 
     await updateUploadEventStatus(env, uploadEventId, 'completed');
+
+    waitUntil(
+      sendUploadNotification(env, {
+        transcriptId: result?.id,
+        school,
+        grade,
+        className,
+        studentName,
+        filename,
+      }).catch((error) => {
+        console.error('Upload notification error:', error);
+      }),
+    );
 
     return jsonResponse({
       ok: true,

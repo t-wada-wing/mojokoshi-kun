@@ -7,9 +7,11 @@ import {
   downloadUrl,
   downloadZipUrl,
   fetchRecords,
+  fetchUploadEvents,
   fetchUploadMonitor,
   verifyPasscode,
   type RecordItem,
+  type UploadEventItem,
   type UploadMonitorData,
 } from '../lib/api';
 
@@ -42,6 +44,21 @@ function dateTimeValue(value: string | null | undefined): number {
 function formatBytes(value: number): string {
   if (value < 1024 * 1024) return `${Math.ceil(value / 1024)}KB`;
   return `${Math.floor(value / 1024 / 1024)}MB`;
+}
+
+function uploadStatusLabel(status: string): string {
+  switch (status) {
+    case 'completed':
+      return '完了';
+    case 'accepted':
+      return '受付中';
+    case 'rejected':
+      return '遮断';
+    case 'failed':
+      return '失敗';
+    default:
+      return status;
+  }
 }
 
 function filenameFromDisposition(disposition: string | null, fallback: string): string {
@@ -100,6 +117,9 @@ export default function DownloadPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [uploadMonitor, setUploadMonitor] = useState<UploadMonitorData | null>(null);
   const [monitorError, setMonitorError] = useState('');
+  const [uploadEvents, setUploadEvents] = useState<UploadEventItem[]>([]);
+  const [uploadEventsError, setUploadEventsError] = useState('');
+  const [showUndownloadedOnly, setShowUndownloadedOnly] = useState(false);
 
   const selectedRecords = useMemo(
     () => records.filter((record) => selectedIds.has(record.id)),
@@ -115,7 +135,16 @@ export default function DownloadPage() {
     [records],
   );
 
-  const allSelected = records.length > 0 && records.every((record) => selectedIds.has(record.id));
+  const visibleRecords = useMemo(
+    () =>
+      showUndownloadedOnly
+        ? records.filter((record) => !record.downloaded_at)
+        : records,
+    [records, showUndownloadedOnly],
+  );
+
+  const allSelected =
+    visibleRecords.length > 0 && visibleRecords.every((record) => selectedIds.has(record.id));
   const undownloadedCount = records.filter((record) => !record.downloaded_at).length;
 
   useEffect(() => {
@@ -124,6 +153,7 @@ export default function DownloadPage() {
       setPasscode(saved);
       setAuthenticated(true);
       void loadUploadMonitor(saved);
+      void loadUploadEvents(saved);
     }
   }, []);
 
@@ -135,6 +165,22 @@ export default function DownloadPage() {
     } catch (error) {
       setUploadMonitor(null);
       setMonitorError(error instanceof Error ? error.message : 'アップロード監視の取得に失敗しました');
+    }
+  };
+
+  const loadUploadEvents = async (targetPasscode = passcode, selectedSchool = school) => {
+    try {
+      const events = await fetchUploadEvents(targetPasscode, {
+        school: selectedSchool || undefined,
+        limit: 50,
+      });
+      setUploadEvents(events);
+      setUploadEventsError('');
+    } catch (error) {
+      setUploadEvents([]);
+      setUploadEventsError(
+        error instanceof Error ? error.message : 'アップロード履歴の取得に失敗しました',
+      );
     }
   };
 
@@ -150,6 +196,7 @@ export default function DownloadPage() {
     sessionStorage.setItem(PASSCODE_STORAGE_KEY, passcode);
     setAuthenticated(true);
     void loadUploadMonitor(passcode);
+    void loadUploadEvents(passcode);
   };
 
   const loadRecords = async (selectedSchool: string) => {
@@ -162,6 +209,7 @@ export default function DownloadPage() {
       setRecords(items);
       setSelectedIds(new Set());
       void loadUploadMonitor(passcode);
+      void loadUploadEvents(passcode, selectedSchool);
     } catch (error) {
       setRecords([]);
       setSelectedIds(new Set());
@@ -213,7 +261,7 @@ export default function DownloadPage() {
   };
 
   const selectAll = () => {
-    setSelectedIds(new Set(records.map((record) => record.id)));
+    setSelectedIds(new Set(visibleRecords.map((record) => record.id)));
   };
 
   const selectUndownloaded = () => {
@@ -315,6 +363,9 @@ export default function DownloadPage() {
             setSelectedIds(new Set());
             setUploadMonitor(null);
             setMonitorError('');
+            setUploadEvents([]);
+            setUploadEventsError('');
+            setShowUndownloadedOnly(false);
           }}
         >
           ログアウト
@@ -357,6 +408,45 @@ export default function DownloadPage() {
         </section>
       ) : null}
       {monitorError ? <p className="field-error">{monitorError}</p> : null}
+
+      <div className="upload-history" aria-live="polite">
+        <div className="history-header">
+          <h3>アップロード履歴</h3>
+          <span>
+            {school ? `${school} / ` : '全スクール / '}
+            {uploadEvents.length > 0 ? `${uploadEvents.length}件表示` : '履歴なし'}
+          </span>
+        </div>
+        {uploadEvents.length > 0 ? (
+          <ol className="upload-history-list">
+            {uploadEvents.map((event) => (
+              <li key={event.id}>
+                <div className="upload-history-main">
+                  <span className={`upload-status upload-status-${event.status}`}>
+                    {uploadStatusLabel(event.status)}
+                  </span>
+                  <span>
+                    {event.school ? `${event.school} / ` : ''}
+                    {event.student_name ?? '不明'} / {event.filename ?? '不明'}
+                  </span>
+                </div>
+                <div className="upload-history-meta">
+                  <time>{formatDateTime(event.created_at)}</time>
+                  {event.grade && event.class ? (
+                    <span>
+                      {event.grade} / {event.class}
+                    </span>
+                  ) : null}
+                  <span>{formatBytes(event.file_size)}</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="field-hint">アップロード履歴はまだありません。</p>
+        )}
+      </div>
+      {uploadEventsError ? <p className="field-error">{uploadEventsError}</p> : null}
 
       <div className="toolbar download-toolbar">
         <button
@@ -431,10 +521,18 @@ export default function DownloadPage() {
         <>
           <div className="selection-toolbar">
             <p>
-              {selectedRecords.length}件選択中 / {records.length}件
+              {selectedRecords.length}件選択中 / {visibleRecords.length}件表示
               {undownloadedCount > 0 ? `（未ダウンロード ${undownloadedCount}件）` : ''}
             </p>
             <div>
+              <label className="filter-toggle">
+                <input
+                  type="checkbox"
+                  checked={showUndownloadedOnly}
+                  onChange={(e) => setShowUndownloadedOnly(e.target.checked)}
+                />
+                <span>未ダウンロードのみ表示</span>
+              </label>
               <button type="button" className="secondary-button" onClick={selectAll} disabled={allSelected}>
                 一括チェック
               </button>
@@ -458,10 +556,10 @@ export default function DownloadPage() {
           </div>
 
           <div className="record-list">
-            {records.map((record) => (
+            {visibleRecords.map((record) => (
               <article
                 key={record.id}
-                className={`record-item${selectedIds.has(record.id) ? ' selected' : ''}`}
+                className={`record-item${selectedIds.has(record.id) ? ' selected' : ''}${record.downloaded_at ? '' : ' undownloaded'}`}
               >
                 <label className="record-select">
                   <input
@@ -508,6 +606,10 @@ export default function DownloadPage() {
 
       {school && !loading && records.length === 0 && !listError ? (
         <p className="field-hint">このスクールの記録はまだありません。</p>
+      ) : null}
+
+      {school && !loading && records.length > 0 && visibleRecords.length === 0 && !listError ? (
+        <p className="field-hint">未ダウンロードの記録はありません。</p>
       ) : null}
     </section>
   );

@@ -8,6 +8,10 @@ export interface Env {
   UPLOAD_MAX_PER_IP_DAY?: string;
   UPLOAD_MAX_GLOBAL_DAY?: string;
   UPLOAD_MAX_FILE_MB?: string;
+  MAIL_API_KEY?: string;
+  MAIL_FROM?: string;
+  NOTIFY_EMAIL_TO?: string;
+  APP_BASE_URL?: string;
 }
 
 export interface TranscriptRecord {
@@ -359,6 +363,89 @@ export async function transcribeAudioInChunks(
   }
 
   return parts.join('\n');
+}
+
+export interface UploadNotificationInput {
+  transcriptId?: number;
+  school: string;
+  grade: string;
+  className: string;
+  studentName: string;
+  filename: string;
+}
+
+export function getNotifyRecipients(env: Env): string[] {
+  const raw = env.NOTIFY_EMAIL_TO?.trim();
+  if (!raw) return [];
+
+  return raw
+    .split(',')
+    .map((email) => email.trim())
+    .filter(Boolean);
+}
+
+export function isMailConfigured(env: Env): boolean {
+  return Boolean(
+    env.MAIL_API_KEY?.trim() && env.MAIL_FROM?.trim() && getNotifyRecipients(env).length > 0,
+  );
+}
+
+function parseMailFrom(from: string): { email: string; name?: string } {
+  const match = from.match(/^(.+?)\s*<([^>]+)>$/);
+  if (match) {
+    return { name: match[1].trim(), email: match[2].trim() };
+  }
+
+  return { email: from };
+}
+
+export async function sendUploadNotification(
+  env: Env,
+  input: UploadNotificationInput,
+): Promise<void> {
+  if (!isMailConfigured(env)) return;
+
+  const recipients = getNotifyRecipients(env);
+  const adminUrl = env.APP_BASE_URL?.trim()
+    ? `${env.APP_BASE_URL.replace(/\/$/, '')}/download`
+    : undefined;
+
+  const lines = [
+    '新しい音声アップロードが完了しました。',
+    '',
+    `学校: ${input.school}`,
+    `学年: ${input.grade}`,
+    `クラス: ${input.className}`,
+    `生徒: ${input.studentName}`,
+    `ファイル: ${input.filename}`,
+  ];
+
+  if (input.transcriptId) {
+    lines.push(`記録ID: ${input.transcriptId}`);
+  }
+
+  if (adminUrl) {
+    lines.push('', `管理画面: ${adminUrl}`);
+  }
+
+  const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.MAIL_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      personalizations: [{ to: recipients.map((email) => ({ email })) }],
+      from: parseMailFrom(env.MAIL_FROM!.trim()),
+      subject: `[文字起こしくん] ${input.school} / ${input.studentName}`,
+      content: [{ type: 'text/plain', value: lines.join('\n') }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Upload notification failed:', response.status, errorText);
+  }
 }
 
 export function collectAudioFilesFromFormData(formData: FormData): File[] {

@@ -8,6 +8,8 @@
 - ブラウザ内で mono 16kHz mp3 に圧縮してから送信
 - 文字起こし結果を `スクール_学年_クラス_氏名.txt` 形式で保存
 - ダウンロードページでスクール単位の一覧表示、個別 txt / zip 一括ダウンロード、削除
+- 管理画面でアップロード履歴の時系列表示、未ダウンロードの絞り込み
+- 文字起こし完了時に管理者メールへ通知（SendGrid）
 
 ## 技術スタック
 
@@ -37,10 +39,19 @@ UPLOAD_MAX_PER_IP_HOUR=12
 UPLOAD_MAX_PER_IP_DAY=40
 UPLOAD_MAX_GLOBAL_DAY=150
 UPLOAD_MAX_FILE_MB=25
+
+# アップロード完了メール通知（任意）
+MAIL_API_KEY=SG.xxx
+MAIL_FROM=文字起こしくん <noreply@example.com>
+NOTIFY_EMAIL_TO=t-narazaki@rensei.co.jp,t-wada@rensei.co.jp
+APP_BASE_URL=https://your-app.pages.dev
 ```
 
 アップロード監視は、上記の上限を超えると OpenAI API を呼ぶ前に遮断し、`/download`
 の管理画面に異常検知として表示します。
+
+メール通知は `MAIL_API_KEY` / `MAIL_FROM` / `NOTIFY_EMAIL_TO` がすべて設定されている場合のみ、
+文字起こし完了後に SendGrid 経由で送信されます。未設定の場合は通知をスキップし、文字起こし処理自体は継続します。
 
 ### 3. Cloudflare リソース
 
@@ -112,6 +123,10 @@ npx wrangler d1 execute transcribe-db --remote --file=./schema.sql
 ```bash
 npx wrangler pages secret put OPENAI_API_KEY --project-name=mojiokoshi-kun
 npx wrangler pages secret put DOWNLOAD_PASSCODE --project-name=mojiokoshi-kun
+npx wrangler pages secret put MAIL_API_KEY --project-name=mojiokoshi-kun
+npx wrangler pages secret put MAIL_FROM --project-name=mojiokoshi-kun
+npx wrangler pages secret put NOTIFY_EMAIL_TO --project-name=mojiokoshi-kun
+npx wrangler pages secret put APP_BASE_URL --project-name=mojiokoshi-kun
 ```
 
 #### Cloudflare Pages と GitHub の連携（ダッシュボード）

@@ -178,6 +178,18 @@ export interface UploadMonitorData {
   };
 }
 
+export interface UploadEventItem {
+  id: number;
+  school: string | null;
+  grade: string | null;
+  class: string | null;
+  student_name: string | null;
+  filename: string | null;
+  file_size: number;
+  status: string;
+  created_at: string;
+}
+
 export async function fetchRecords(
   passcode: string,
   school: string,
@@ -197,6 +209,38 @@ export async function fetchRecords(
   }
 
   return data.records;
+}
+
+export async function fetchUploadEvents(
+  passcode: string,
+  options?: { school?: string; limit?: number },
+): Promise<UploadEventItem[]> {
+  const params = new URLSearchParams();
+  if (options?.school) {
+    params.set('school', options.school);
+  }
+  if (options?.limit) {
+    params.set('limit', String(options.limit));
+  }
+
+  const query = params.toString();
+  const response = await fetch(`/api/upload-events${query ? `?${query}` : ''}`, {
+    headers: {
+      'X-Passcode': passcode,
+    },
+  });
+
+  const data = (await response.json()) as {
+    ok: boolean;
+    events?: UploadEventItem[];
+    error?: string;
+  };
+
+  if (!response.ok || !data.ok || !data.events) {
+    throw new Error(data.error ?? 'アップロード履歴の取得に失敗しました');
+  }
+
+  return data.events;
 }
 
 export async function fetchUploadMonitor(passcode: string): Promise<UploadMonitorData> {

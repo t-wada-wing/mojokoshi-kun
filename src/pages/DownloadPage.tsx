@@ -6,10 +6,12 @@ import {
   downloadSelectedZipUrl,
   downloadUrl,
   downloadZipUrl,
+  fetchDownloadEvents,
   fetchRecords,
   fetchUploadEvents,
   fetchUploadMonitor,
   verifyPasscode,
+  type DownloadEventItem,
   type RecordItem,
   type UploadEventItem,
   type UploadMonitorData,
@@ -35,10 +37,6 @@ function formatDateTime(value: string | null | undefined): string {
     timeStyle: 'short',
     timeZone: 'Asia/Tokyo',
   }).format(date);
-}
-
-function dateTimeValue(value: string | null | undefined): number {
-  return parseServerDate(value)?.getTime() ?? 0;
 }
 
 function formatBytes(value: number): string {
@@ -119,20 +117,13 @@ export default function DownloadPage() {
   const [monitorError, setMonitorError] = useState('');
   const [uploadEvents, setUploadEvents] = useState<UploadEventItem[]>([]);
   const [uploadEventsError, setUploadEventsError] = useState('');
+  const [downloadEvents, setDownloadEvents] = useState<DownloadEventItem[]>([]);
+  const [downloadEventsError, setDownloadEventsError] = useState('');
   const [showUndownloadedOnly, setShowUndownloadedOnly] = useState(false);
 
   const selectedRecords = useMemo(
     () => records.filter((record) => selectedIds.has(record.id)),
     [records, selectedIds],
-  );
-
-  const latestDownloads = useMemo(
-    () =>
-      [...records]
-        .filter((record) => record.downloaded_at)
-        .sort((a, b) => dateTimeValue(b.downloaded_at) - dateTimeValue(a.downloaded_at))
-        .slice(0, 5),
-    [records],
   );
 
   const visibleRecords = useMemo(
@@ -154,6 +145,7 @@ export default function DownloadPage() {
       setAuthenticated(true);
       void loadUploadMonitor(saved);
       void loadUploadEvents(saved);
+      void loadDownloadEvents(saved);
     }
   }, []);
 
@@ -172,6 +164,7 @@ export default function DownloadPage() {
     try {
       const events = await fetchUploadEvents(targetPasscode, {
         school: selectedSchool || undefined,
+        status: 'completed',
         limit: 50,
       });
       setUploadEvents(events);
@@ -179,7 +172,23 @@ export default function DownloadPage() {
     } catch (error) {
       setUploadEvents([]);
       setUploadEventsError(
-        error instanceof Error ? error.message : 'アップロード履歴の取得に失敗しました',
+        error instanceof Error ? error.message : 'アップロード完了履歴の取得に失敗しました',
+      );
+    }
+  };
+
+  const loadDownloadEvents = async (targetPasscode = passcode, selectedSchool = school) => {
+    try {
+      const events = await fetchDownloadEvents(targetPasscode, {
+        school: selectedSchool || undefined,
+        limit: 50,
+      });
+      setDownloadEvents(events);
+      setDownloadEventsError('');
+    } catch (error) {
+      setDownloadEvents([]);
+      setDownloadEventsError(
+        error instanceof Error ? error.message : 'ダウンロード実行履歴の取得に失敗しました',
       );
     }
   };
@@ -197,6 +206,7 @@ export default function DownloadPage() {
     setAuthenticated(true);
     void loadUploadMonitor(passcode);
     void loadUploadEvents(passcode);
+    void loadDownloadEvents(passcode);
   };
 
   const loadRecords = async (selectedSchool: string) => {
@@ -210,6 +220,7 @@ export default function DownloadPage() {
       setSelectedIds(new Set());
       void loadUploadMonitor(passcode);
       void loadUploadEvents(passcode, selectedSchool);
+      void loadDownloadEvents(passcode, selectedSchool);
     } catch (error) {
       setRecords([]);
       setSelectedIds(new Set());
@@ -239,6 +250,7 @@ export default function DownloadPage() {
       await Promise.all([
         loadUploadMonitor(passcode),
         loadUploadEvents(passcode),
+        loadDownloadEvents(passcode),
       ]);
     }
     setActionMessage(message);
@@ -366,6 +378,8 @@ export default function DownloadPage() {
             setMonitorError('');
             setUploadEvents([]);
             setUploadEventsError('');
+            setDownloadEvents([]);
+            setDownloadEventsError('');
             setShowUndownloadedOnly(false);
           }}
         >
@@ -418,44 +432,78 @@ export default function DownloadPage() {
       ) : null}
       {monitorError ? <p className="field-error">{monitorError}</p> : null}
 
-      <div className="upload-history" aria-live="polite">
-        <div className="history-header">
-          <h3>アップロード履歴</h3>
-          <span>
-            {school ? `${school} / ` : '全スクール / '}
-            {uploadEvents.length > 0 ? `${uploadEvents.length}件表示` : '履歴なし'}
-          </span>
-        </div>
-        {uploadEvents.length > 0 ? (
-          <ol className="upload-history-list">
-            {uploadEvents.map((event) => (
-              <li key={event.id}>
-                <div className="upload-history-main">
-                  <span className={`upload-status upload-status-${event.status}`}>
-                    {uploadStatusLabel(event.status)}
-                  </span>
-                  <span>
-                    {event.school ? `${event.school} / ` : ''}
-                    {event.student_name ?? '不明'} / {event.filename ?? '不明'}
-                  </span>
-                </div>
-                <div className="upload-history-meta">
-                  <time>{formatDateTime(event.created_at)}</time>
-                  {event.grade && event.class ? (
+      <div className="history-grid">
+        <section className="upload-history" aria-live="polite">
+          <div className="history-header">
+            <h3>アップロード完了履歴</h3>
+            <span>
+              {school ? `${school} / ` : '全スクール / '}
+              {uploadEvents.length > 0 ? `${uploadEvents.length}件表示` : '履歴なし'}
+            </span>
+          </div>
+          {uploadEvents.length > 0 ? (
+            <ol className="history-list">
+              {uploadEvents.map((event) => (
+                <li key={event.id}>
+                  <div className="history-main">
+                    <span className={`history-status upload-status-${event.status}`}>
+                      {uploadStatusLabel(event.status)}
+                    </span>
+                    <span>
+                      {event.school ? `${event.school} / ` : ''}
+                      {event.student_name ?? '不明'} / {event.filename ?? '不明'}
+                    </span>
+                  </div>
+                  <div className="history-meta">
+                    <time>{formatDateTime(event.created_at)}</time>
+                    {event.grade && event.class ? (
+                      <span>
+                        {event.grade} / {event.class}
+                      </span>
+                    ) : null}
+                    <span>{formatBytes(event.file_size)}</span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="field-hint">アップロード完了履歴はまだありません。</p>
+          )}
+        </section>
+        <section className="download-history" aria-live="polite">
+          <div className="history-header">
+            <h3>ダウンロード実行履歴</h3>
+            <span>
+              {school ? `${school} / ` : '全スクール / '}
+              {downloadEvents.length > 0 ? `${downloadEvents.length}件表示` : '履歴なし'}
+            </span>
+          </div>
+          {downloadEvents.length > 0 ? (
+            <ol className="history-list">
+              {downloadEvents.map((event) => (
+                <li key={event.id}>
+                  <div className="history-main">
+                    <span className="history-status download-executed">DL済</span>
+                    <span>
+                      {event.school} / {event.student_name} / {event.filename}
+                    </span>
+                  </div>
+                  <div className="history-meta">
+                    <time>{formatDateTime(event.downloaded_at)}</time>
                     <span>
                       {event.grade} / {event.class}
                     </span>
-                  ) : null}
-                  <span>{formatBytes(event.file_size)}</span>
-                </div>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="field-hint">アップロード履歴はまだありません。</p>
-        )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="field-hint">ダウンロード実行履歴はまだありません。</p>
+          )}
+        </section>
       </div>
       {uploadEventsError ? <p className="field-error">{uploadEventsError}</p> : null}
+      {downloadEventsError ? <p className="field-error">{downloadEventsError}</p> : null}
 
       <div className="toolbar download-toolbar">
         <button
@@ -496,29 +544,6 @@ export default function DownloadPage() {
           >
             選択したファイルをダウンロード (zip)
           </button>
-        </div>
-      ) : null}
-
-      {school ? (
-        <div className="download-history" aria-live="polite">
-          <div className="history-header">
-            <h3>最新のダウンロード履歴</h3>
-            <span>{latestDownloads.length > 0 ? `${latestDownloads.length}件表示` : '履歴なし'}</span>
-          </div>
-          {latestDownloads.length > 0 ? (
-            <ol>
-              {latestDownloads.map((record) => (
-                <li key={record.id}>
-                  <span>
-                    {record.student_name} / {record.filename}
-                  </span>
-                  <time>{formatDateTime(record.downloaded_at)}</time>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="field-hint">このスクールのダウンロード履歴はまだありません。</p>
-          )}
         </div>
       ) : null}
 

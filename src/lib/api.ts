@@ -190,6 +190,17 @@ export interface UploadEventItem {
   created_at: string;
 }
 
+export interface DownloadEventItem {
+  id: number;
+  school: string;
+  grade: string;
+  class: string;
+  student_name: string;
+  filename: string;
+  created_at: string;
+  downloaded_at: string;
+}
+
 export async function fetchRecords(
   passcode: string,
   school: string,
@@ -213,11 +224,14 @@ export async function fetchRecords(
 
 export async function fetchUploadEvents(
   passcode: string,
-  options?: { school?: string; limit?: number },
+  options?: { school?: string; status?: string; limit?: number },
 ): Promise<UploadEventItem[]> {
   const params = new URLSearchParams();
   if (options?.school) {
     params.set('school', options.school);
+  }
+  if (options?.status) {
+    params.set('status', options.status);
   }
   if (options?.limit) {
     params.set('limit', String(options.limit));
@@ -238,6 +252,38 @@ export async function fetchUploadEvents(
 
   if (!response.ok || !data.ok || !data.events) {
     throw new Error(data.error ?? 'アップロード履歴の取得に失敗しました');
+  }
+
+  return data.events;
+}
+
+export async function fetchDownloadEvents(
+  passcode: string,
+  options?: { school?: string; limit?: number },
+): Promise<DownloadEventItem[]> {
+  const params = new URLSearchParams();
+  if (options?.school) {
+    params.set('school', options.school);
+  }
+  if (options?.limit) {
+    params.set('limit', String(options.limit));
+  }
+
+  const query = params.toString();
+  const response = await fetch(`/api/download-events${query ? `?${query}` : ''}`, {
+    headers: {
+      'X-Passcode': passcode,
+    },
+  });
+
+  const data = (await response.json()) as {
+    ok: boolean;
+    events?: DownloadEventItem[];
+    error?: string;
+  };
+
+  if (!response.ok || !data.ok || !data.events) {
+    throw new Error(data.error ?? 'ダウンロード実行履歴の取得に失敗しました');
   }
 
   return data.events;

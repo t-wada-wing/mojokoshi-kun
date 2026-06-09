@@ -26,26 +26,32 @@ export const onRequestGet: PagesFunction<Env> = async (context: PagesContext) =>
 
   const url = new URL(request.url);
   const school = url.searchParams.get('school')?.trim() ?? '';
+  const status = url.searchParams.get('status')?.trim() ?? '';
   const limitRaw = Number(url.searchParams.get('limit') ?? '50');
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.floor(limitRaw), 1), 200) : 50;
 
   try {
     await ensureSchema(env);
 
-    const query = school
-      ? env.DB.prepare(
-          `SELECT id, school, grade, class, student_name, filename, file_size, status, created_at
-           FROM upload_events
-           WHERE school = ?
-           ORDER BY created_at DESC, id DESC
-           LIMIT ?`,
-        ).bind(school, limit)
-      : env.DB.prepare(
-          `SELECT id, school, grade, class, student_name, filename, file_size, status, created_at
-           FROM upload_events
-           ORDER BY created_at DESC, id DESC
-           LIMIT ?`,
-        ).bind(limit);
+    const filters: string[] = [];
+    const bindings: Array<string | number> = [];
+    if (school) {
+      filters.push('school = ?');
+      bindings.push(school);
+    }
+    if (status) {
+      filters.push('status = ?');
+      bindings.push(status);
+    }
+
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const query = env.DB.prepare(
+      `SELECT id, school, grade, class, student_name, filename, file_size, status, created_at
+       FROM upload_events
+       ${whereClause}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    ).bind(...bindings, limit);
 
     const result = await query.all<UploadEventRow>();
 

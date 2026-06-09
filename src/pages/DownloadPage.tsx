@@ -233,8 +233,14 @@ export default function DownloadPage() {
   };
 
   const refreshAfterDownload = async (message: string) => {
-    if (!school) return;
-    await loadRecords(school);
+    if (school) {
+      await loadRecords(school);
+    } else {
+      await Promise.all([
+        loadUploadMonitor(passcode),
+        loadUploadEvents(passcode),
+      ]);
+    }
     setActionMessage(message);
   };
 
@@ -285,12 +291,7 @@ export default function DownloadPage() {
     setActionMessage('全スクールのダウンロードを準備しています...');
     try {
       await startDownload(downloadAllZipUrl(passcode), '全スクール文字起こし.zip');
-      if (school) {
-        await loadRecords(school);
-      } else {
-        void loadUploadMonitor(passcode);
-      }
-      setActionMessage('全スクール一括ダウンロードが完了しました');
+      await refreshAfterDownload('全スクール一括ダウンロードが完了しました');
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : 'ダウンロードに失敗しました');
     }
@@ -384,8 +385,16 @@ export default function DownloadPage() {
               <span>24時間の総数</span>
             </p>
             <p>
+              <strong>{uploadMonitor.summary.completedCount}</strong>
+              <span>完了</span>
+            </p>
+            <p>
               <strong>{uploadMonitor.summary.rejectedCount}</strong>
               <span>遮断</span>
+            </p>
+            <p>
+              <strong>{uploadMonitor.summary.failedCount}</strong>
+              <span>失敗</span>
             </p>
             <p>
               <strong>{formatBytes(uploadMonitor.limits.maxFileBytes)}</strong>

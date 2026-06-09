@@ -56,18 +56,44 @@ npx wrangler pages deploy "$BUILD_DIR" \
   --commit-hash="$COMMIT_HASH" \
   --commit-message="$COMMIT_SUBJECT"
 
-sync_download_passcode_secret() {
-  [[ "${SKIP_SYNC_DOWNLOAD_PASSCODE:-0}" == "1" ]] && return 0
-  [[ -f .dev.vars ]] || return 0
+read_dev_var() {
+  local key="$1"
+  local line value
 
-  local passcode
-  passcode="$(grep -E '^DOWNLOAD_PASSCODE=' .dev.vars | head -1 | cut -d= -f2- | tr -d '\r' || true)"
-  [[ -n "$passcode" ]] || return 0
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" .dev.vars | tail -1 || true)"
+  [[ -n "$line" ]] || return 1
 
-  log "Pages シークレット DOWNLOAD_PASSCODE を .dev.vars と同期"
-  printf '%s' "$passcode" | npx wrangler pages secret put DOWNLOAD_PASSCODE --project-name="$PROJECT_NAME"
+  value="${line#*=}"
+  value="${value%$'\r'}"
+
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+
+  [[ -n "$value" ]] || return 1
+  printf '%s' "$value"
 }
 
-sync_download_passcode_secret
+sync_pages_secret() {
+  local key="$1"
+  local value
+
+  [[ -f .dev.vars ]] || return 0
+  if [[ "$key" == "DOWNLOAD_PASSCODE" && "${SKIP_SYNC_DOWNLOAD_PASSCODE:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  value="$(read_dev_var "$key" || true)"
+  [[ -n "$value" ]] || return 0
+
+  log "Pages シークレット ${key} を .dev.vars と同期"
+  printf '%s' "$value" | npx wrangler pages secret put "$key" --project-name="$PROJECT_NAME"
+}
+
+for secret_name in DOWNLOAD_PASSCODE MAIL_API_KEY MAIL_FROM NOTIFY_EMAIL_TO APP_BASE_URL; do
+  sync_pages_secret "$secret_name"
+done
 
 log "完了: https://${PROJECT_NAME}.pages.dev"

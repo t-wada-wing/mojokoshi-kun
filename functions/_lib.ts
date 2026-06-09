@@ -428,23 +428,59 @@ export async function sendUploadNotification(
     lines.push('', `管理画面: ${adminUrl}`);
   }
 
-  const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.MAIL_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      personalizations: [{ to: recipients.map((email) => ({ email })) }],
-      from: parseMailFrom(env.MAIL_FROM!.trim()),
-      subject: `[文字起こしくん] ${input.school} / ${input.studentName}`,
-      content: [{ type: 'text/plain', value: lines.join('\n') }],
-    }),
+  const body = JSON.stringify({
+    personalizations: [{ to: recipients.map((email) => ({ email })) }],
+    from: parseMailFrom(env.MAIL_FROM!.trim()),
+    subject: `[文字起こしくん] ${input.school} / ${input.studentName}`,
+    content: [{ type: 'text/plain', value: lines.join('\n') }],
   });
+
+  let response: Response;
+  try {
+    response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.MAIL_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+    });
+  } catch (error) {
+    console.error('Upload notification failed:', error);
+    await recordMailFailure(env, input, {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
     console.error('Upload notification failed:', response.status, errorText);
+    await recordMailFailure(env, input, {
+      status: response.status,
+      message: errorText.slice(0, 500),
+    });
+  }
+}
+
+async function recordMailFailure(
+  env: Env,
+  input: UploadNotificationInput,
+  failure: { status?: number; message: string },
+): Promise<void> {
+  try {
+    await recordUploadAlert(env, 'mail_failed', null, {
+      transcriptId: input.transcriptId,
+      school: input.school,
+      grade: input.grade,
+      className: input.className,
+      studentName: input.studentName,
+      filename: input.filename,
+      status: failure.status,
+      message: failure.message,
+    });
+  } catch (error) {
+    console.error('Upload notification alert recording failed:', error);
   }
 }
 

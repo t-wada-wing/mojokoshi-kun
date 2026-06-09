@@ -21,7 +21,7 @@ interface PagesContext {
 }
 
 export const onRequestPost: PagesFunction<Env> = async (context: PagesContext) => {
-  const { request, env, waitUntil } = context;
+  const { request, env } = context;
 
   if (!env.OPENAI_API_KEY) {
     return jsonResponse({ ok: false, error: 'OPENAI_API_KEY が設定されていません' }, 500);
@@ -138,7 +138,7 @@ export const onRequestPost: PagesFunction<Env> = async (context: PagesContext) =
 
     await updateUploadEventStatus(env, uploadEventId, 'completed');
 
-    waitUntil(
+    context.waitUntil(
       sendUploadNotification(env, {
         transcriptId: result?.id,
         school,

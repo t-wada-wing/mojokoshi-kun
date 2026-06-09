@@ -42,8 +42,8 @@ UPLOAD_MAX_FILE_MB=25
 
 # アップロード完了メール通知（任意）
 MAIL_API_KEY=SG.xxx
-MAIL_FROM=文字起こしくん <noreply@example.com>
-NOTIFY_EMAIL_TO=t-narazaki@rensei.co.jp,t-wada@rensei.co.jp
+MAIL_FROM="文字起こしくん <verified-sender@example.com>"
+NOTIFY_EMAIL_TO="t-narazaki@rensei.co.jp,t-wada@rensei.co.jp"
 APP_BASE_URL=https://your-app.pages.dev
 ```
 
@@ -52,6 +52,25 @@ APP_BASE_URL=https://your-app.pages.dev
 
 メール通知は `MAIL_API_KEY` / `MAIL_FROM` / `NOTIFY_EMAIL_TO` がすべて設定されている場合のみ、
 文字起こし完了後に SendGrid 経由で送信されます。未設定の場合は通知をスキップし、文字起こし処理自体は継続します。
+メール本文にはパスコードや文字起こし本文は含めず、管理画面へのリンクは `${APP_BASE_URL}/download` のみを載せます。
+
+### SendGrid 初期設定
+
+1. Twilio SendGrid にログインし、`Settings > API Keys` で送信用 API キーを作成します。権限を絞る場合は `mail.send` を許可してください。
+2. `Settings > Sender Authentication > Single Sender Verification` で、`MAIL_FROM` に使う送信元メールアドレスを登録し、届いた確認メールのリンクで認証を完了します。
+3. ローカルでは `.dev.vars` に `MAIL_API_KEY` / `MAIL_FROM` / `NOTIFY_EMAIL_TO` / `APP_BASE_URL` を設定します。`MAIL_FROM` に表示名を含める場合は `"文字起こしくん <verified-sender@example.com>"` のように引用符で囲みます。
+4. 本番では Cloudflare Pages Secret に同じ値を設定します。
+
+```bash
+npx wrangler pages secret put MAIL_API_KEY --project-name=mojiokoshi-kun
+npx wrangler pages secret put MAIL_FROM --project-name=mojiokoshi-kun
+npx wrangler pages secret put NOTIFY_EMAIL_TO --project-name=mojiokoshi-kun
+npx wrangler pages secret put APP_BASE_URL --project-name=mojiokoshi-kun
+```
+
+`npm run ship:prod` は `.dev.vars` に値がある場合、`DOWNLOAD_PASSCODE` に加えて上記のメール関連 Secret も同期します。空欄の項目はスキップします。
+
+テスト時は、まず `MAIL_API_KEY` を空にした状態で文字起こしが成功することを確認し、その後 SendGrid 設定済みの状態で短い音声を1件アップロードして管理者メールに通知が届くことを確認します。通知失敗時は `/download` のアップロード監視に `mail_failed` として記録されます。
 
 ### 3. Cloudflare リソース
 
@@ -100,7 +119,7 @@ npm run deploy
 
 #### 方法C: コミット + push + 本番デプロイ（一括）
 
-`main` ブランチで実行します。ビルド後にコミット・push・`wrangler pages deploy` まで行い、`.dev.vars` の `DOWNLOAD_PASSCODE` があれば Pages シークレットも同期します。
+`main` ブランチで実行します。ビルド後にコミット・push・`wrangler pages deploy` まで行い、`.dev.vars` の `DOWNLOAD_PASSCODE` とメール関連設定があれば Pages シークレットも同期します。
 
 ```bash
 npm run ship:prod -- "chore: update download passcode"
